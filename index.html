@@ -179,6 +179,7 @@ a.visit:hover .title { text-decoration: underline; }
   .calendar { grid-template-columns: minmax(0, 1fr); }
   .calendar .panel { position: static; order: -1; }
 }
+.rows-plain { margin-top: 4px; }
 .more { display: block; margin-top: 12px; color: var(--ink-2); text-decoration: none; font-size: 13px; }
 .more:hover { color: var(--ink); }
 .metric { margin: 12px 0 8px; }
@@ -250,6 +251,31 @@ const MUSCLES = [
   ["Chrbát", /pull.?down|pull-up|row\b|pullover|back extension/i],
   ["Hrudník", /bench press|chest press|fly|pec dec/i],
 ];
+const SPORT_RANGES = [[90, "3 mes."], [182, "6 mes."], [365, "1 rok"], [0, "Všetko"]];
+const MIN_TREND_POINTS = 3;
+const ROLLING_ACTIVITIES = 5;
+// Scarf's rule: a metre of climbing costs a runner about as much as 7.92 metres on the flat.
+const RUN_CLIMB_FACTOR = 7.92;
+const SPORTS = {
+  beh: {
+    label: "Beh", color: "var(--run)", types: ["Run", "TrailRun", "VirtualRun"], minKm: 3, climb: RUN_CLIMB_FACTOR, paceLabel: "Tempo", lowerIsFaster: true,
+    pace: (a) => 1000 / a.average_speed, paceText: (v) => `${clockShort(v)} /km`,
+    records: [["Najdlhší", "distance"], ["Najrýchlejších 5 km+", "fast", 5], ["Najrýchlejších 10 km+", "fast", 10], ["Najviac stúpania", "climb"]],
+    efficiencyNote: "Metre na jeden úder srdca, prepočítané o stúpanie. Vyššie je lepšie.",
+  },
+  bicykel: {
+    label: "Bicykel", color: "var(--ride)", types: ["Ride", "VirtualRide", "EBikeRide", "GravelRide", "MountainBikeRide"], minKm: 15, climb: 0, skipTrainer: true, paceLabel: "Rýchlosť",
+    pace: (a) => a.average_speed * 3.6, paceText: (v) => `${num(v, 1)} km/h`,
+    records: [["Najdlhšia", "distance"], ["Najrýchlejších 50 km+", "fast", 50], ["Najrýchlejších 100 km+", "fast", 100], ["Najviac stúpania", "climb"]],
+    efficiencyNote: "Metre na jeden úder srdca. Kopcovité trasy ju znižujú, porovnávaj podobné jazdy.",
+  },
+  plavanie: {
+    label: "Plávanie", color: "var(--other)", types: ["Swim"], minKm: 0.2, climb: 0, paceLabel: "Tempo", lowerIsFaster: true,
+    pace: (a) => 100 / a.average_speed, paceText: (v) => `${clockShort(v)} /100 m`,
+    records: [["Najdlhšie", "distance"], ["Najrýchlejšie", "fast", 0]],
+    efficiencyNote: "Metre na jeden úder srdca. Vyššie je lepšie.",
+  },
+};
 const RECORD_DAYS = 30;
 const TREND_DAYS = 28;
 const TREND_THRESHOLD = 2.5;
@@ -268,7 +294,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], sportRange: 365, sportMetric: "efficiency", weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -314,6 +340,7 @@ const fullDate = (day) => new Date(`${day}T12:00:00`).toLocaleDateString("sk-SK"
 const clock = (min) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
 const hours = (seconds) => `${Math.floor(seconds / 3600)} h ${String(Math.round(seconds / 60) % 60).padStart(2, "0")} min`;
 const duration = (activity) => activity.moving_time || activity.elapsed_time;
+const clockShort = (seconds) => { const total = Math.round(seconds); return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`; };
 const mean = (values) => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 
 async function api(path) {
@@ -557,7 +584,7 @@ const hideTip = () => { tip.hidden = true; };
 
 /* Charts */
 function niceTicks(lo, hi, count = 4) {
-  const span = Math.max(hi - lo, 1);
+  const span = hi - lo || 1;
   const raw = span / count;
   const mag = 10 ** Math.floor(Math.log10(raw));
   const step = [1, 2, 5, 10].map((m) => m * mag).find((m) => m >= raw);
@@ -565,7 +592,7 @@ function niceTicks(lo, hi, count = 4) {
   for (let v = Math.floor(lo / step) * step; v < hi + step; v += step) ticks.push(+v.toFixed(6));
   return ticks;
 }
-function frame(el, height, ticks, label) {
+function frame(el, height, ticks, label, tickText) {
   const width = Math.max(el.clientWidth, 260);
   const m = { top: 10, right: 12, bottom: 24, left: 34 };
   const svg = s("svg", { viewBox: `0 0 ${width} ${height}`, height, role: "img", "aria-label": label, tabindex: 0 });
@@ -573,15 +600,15 @@ function frame(el, height, ticks, label) {
   const y = (v) => plot.y + plot.h - ((v - ticks[0]) / (ticks[ticks.length - 1] - ticks[0])) * plot.h;
   ticks.forEach((t, i) => {
     svg.append(s("line", { x1: plot.x, x2: plot.x + plot.w, y1: y(t), y2: y(t), stroke: i ? "var(--grid)" : "var(--axis)" }));
-    svg.append(s("text", { x: plot.x - 7, y: y(t) + 4, "text-anchor": "end", text: t >= 1000 ? `${num(t / 1000, t % 1000 ? 1 : 0)}k` : num(t) }));
+    svg.append(s("text", { x: plot.x - 7, y: y(t) + 4, "text-anchor": "end", text: tickText ? tickText(t) : t >= 1000 ? `${num(t / 1000, t % 1000 ? 1 : 0)}k` : num(t) }));
   });
   return { svg, plot, y };
 }
-function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, regions = [], gap, label, read }) {
+function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, regions = [], gap, label, read, tickText }) {
   const all = series.flatMap((sr) => sr.values).concat(band ? [...band.lo, ...band.hi] : []).filter((v) => v != null);
   const pad = (Math.max(...all) - Math.min(...all)) * 0.08 || 2;
   const ticks = niceTicks(Math.min(...all) - pad, Math.max(...all) + pad);
-  const { svg, plot, y } = frame(el, height, ticks, label);
+  const { svg, plot, y } = frame(el, height, ticks, label, tickText);
   const px = (v) => plot.x + ((v - xMin) / (xMax - xMin || 1)) * plot.w;
 
   for (const r of regions) {
@@ -1166,6 +1193,145 @@ function recordsView(index) {
   }
   return [h("div", { class: "grid2" }, summary, all)];
 }
+function sportActivities(sport) {
+  return state.activities.filter((a) => sport.types.includes(a.sport_type)).sort((a, b) => a.start_date.localeCompare(b.start_date));
+}
+function trendActivities(sport, list) {
+  return list.filter((a) => a.distance / 1000 >= sport.minKm && a.average_speed > 0 && !(sport.skipTrainer && a.trainer));
+}
+function efficiency(sport, a) {
+  if (!a.average_heartrate) return null;
+  const metres = a.distance + (a.total_elevation_gain ?? 0) * sport.climb;
+  return metres / ((a.moving_time / 60) * a.average_heartrate);
+}
+function sportMetrics(sport) {
+  const metres = (v) => `${num(v, 2)} m/úder`;
+  return {
+    efficiency: { label: "Efektivita", value: (a) => efficiency(sport, a), text: metres, tick: (v) => num(v, 2), note: sport.efficiencyNote },
+    pace: { label: sport.paceLabel, value: sport.pace, text: sport.paceText, tick: sport.lowerIsFaster ? clockShort : (v) => num(v), note: sport.lowerIsFaster ? "Nižšie je rýchlejšie." : "Závisí aj od stúpania a vetra." },
+    hr: { label: "Tep", value: (a) => a.average_heartrate ?? null, text: (v) => `${num(v)} bpm`, note: "Priemerný tep aktivity." },
+    distance: { label: "Vzdialenosť", value: (a) => a.distance / 1000, text: (v) => `${num(v, 1)} km`, note: "Dĺžka jednotlivých aktivít." },
+  };
+}
+function sportSummary(sport, list) {
+  const trend = trendActivities(sport, list);
+  const distance = list.reduce((sum, a) => sum + a.distance, 0) / 1000;
+  const seconds = list.reduce((sum, a) => sum + a.moving_time, 0);
+  const paced = trend.reduce((sum, a) => sum + a.distance, 0);
+  const paceSeconds = trend.reduce((sum, a) => sum + a.moving_time, 0);
+  const speed = paceSeconds ? paced / paceSeconds : null;
+  const rated = trend.map((a) => efficiency(sport, a)).filter((v) => v != null);
+  const beats = trend.filter((a) => a.average_heartrate);
+  return {
+    count: list.length, distance, seconds, pace: speed ? sport.pace({ average_speed: speed }) : null,
+    efficiency: rated.length ? mean(rated) : null,
+    hr: beats.length ? mean(beats.map((a) => a.average_heartrate)) : null,
+  };
+}
+function sportRecords(sport, all) {
+  const usable = trendActivities(sport, all);
+  const best = (list, score) => list.length ? list.reduce((a, b) => (score(b) > score(a) ? b : a)) : null;
+  return sport.records.flatMap(([label, kind, km]) => {
+    if (kind === "distance") { const a = best(all, (x) => x.distance); return a ? [{ label, a, value: `${num(a.distance / 1000, 1)} km` }] : []; }
+    if (kind === "climb") { const a = best(usable, (x) => x.total_elevation_gain ?? 0); return a?.total_elevation_gain ? [{ label, a, value: `${num(a.total_elevation_gain)} m` }] : []; }
+    const a = best(usable.filter((x) => x.distance / 1000 >= km), (x) => x.average_speed);
+    return a ? [{ label, a, value: sport.paceText(sport.pace(a)) }] : [];
+  });
+}
+function compareText(now, before, text, lowerIsBetter) {
+  if (now == null || before == null || !before) return "bez porovnania";
+  const diff = now - before;
+  if (Math.abs(diff) < 1e-9) return "bez zmeny";
+  return `${diff > 0 ? "+" : "−"}${text(Math.abs(diff))}${lowerIsBetter ? (diff < 0 ? " (lepšie)" : " (horšie)") : ""}`;
+}
+function sportView() {
+  const key = SPORTS[route().kind] ? route().kind : "beh";
+  const sport = SPORTS[key];
+  const today = localDay(new Date());
+  const all = sportActivities(sport);
+  const nav = h("div", { class: "seg subnav", role: "group", "aria-label": "Šport" },
+    ...Object.entries(SPORTS).map(([id, item]) => h("a", { href: `#/vytrvalost/${id}`, "aria-current": String(id === key), text: item.label })));
+  const filter = h("div", { class: "seg metric", role: "group", "aria-label": "Obdobie" },
+    ...SPORT_RANGES.map(([days, label]) => h("button", { "aria-pressed": String(state.sportRange === days), text: label, onclick: () => { state.sportRange = days; render(); } })));
+  if (!all.length) return [nav, h("section", { class: "card" }, h("div", { class: "empty", text: "Zatiaľ žiadna aktivita." }))];
+
+  const from = state.sportRange ? addDays(today, -(state.sportRange - 1)) : "0000";
+  const prevFrom = state.sportRange ? addDays(from, -state.sportRange) : null;
+  const dayOf = (a) => a.start_date_local.slice(0, 10);
+  const list = all.filter((a) => dayOf(a) >= from);
+  const previous = prevFrom ? all.filter((a) => dayOf(a) >= prevFrom && dayOf(a) < from) : [];
+  const now = sportSummary(sport, list), was = sportSummary(sport, previous);
+  const cmp = (value, before, text, lower) => (prevFrom && previous.length ? compareText(value, before, text, lower) : "bez porovnania");
+  const tile = (label, value, unit, delta) => h("div", { class: "tile" }, h("div", { class: "label", text: label }),
+    h("div", { class: "value" }, value, unit ? h("small", { text: unit }) : null), h("div", { class: "delta", text: delta }));
+  const paceTile = now.pace == null ? "–" : sport.paceText(now.pace);
+  const tiles = h("div", { class: "tiles" },
+    tile("Aktivity", String(now.count), "", cmp(now.count, was.count, String)),
+    tile("Vzdialenosť", num(now.distance), "km", cmp(now.distance, was.distance, (v) => `${num(v)} km`)),
+    tile("Čas", num(now.seconds / 3600, 1), "h", cmp(now.seconds, was.seconds, (v) => `${num(v / 3600, 1)} h`)),
+    tile(sport.paceLabel, paceTile, "", cmp(now.pace, was.pace, sport.paceText, sport.lowerIsFaster)),
+    tile("Efektivita", now.efficiency == null ? "–" : num(now.efficiency, 2), "m/úder", cmp(now.efficiency, was.efficiency, (v) => num(v, 2))));
+
+  const metrics = sportMetrics(sport);
+  const metricKey = metrics[state.sportMetric] ? state.sportMetric : "efficiency";
+  const metric = metrics[metricKey];
+  const points = trendActivities(sport, list).map((a) => ({ a, day: dayOf(a), value: metric.value(a) })).filter((p) => p.value != null);
+  const trend = h("section", { class: "card" }, h("h2", { text: "Progres" }), h("p", { class: "note", text: metric.note }),
+    h("div", { class: "seg metric", role: "group", "aria-label": "Ukazovateľ" },
+      ...Object.entries(metrics).map(([id, item]) => h("button", { "aria-pressed": String(id === metricKey), text: item.label, onclick: () => { state.sportMetric = id; render(); } }))));
+  if (points.length >= MIN_TREND_POINTS) {
+    const start = points[0].day, end = points[points.length - 1].day;
+    const span = Math.max(daysBetween(start, end), 1);
+    const values = points.map((p) => p.value);
+    const rolling = values.map((_, i) => mean(values.slice(Math.max(0, i - ROLLING_ACTIVITIES + 1), i + 1)));
+    const chart = h("div", { class: "chart" });
+    chart.draw = () => lineChart(chart, {
+      x: points.map((p) => daysBetween(start, p.day)), xMin: 0, xMax: span, xTicks: dateAxis(start, end), tickText: metric.tick,
+      series: [{ color: sport.color, values, dots: true, opacity: 0.6 }, { color: sport.color, values: rolling }],
+      label: `${sport.label}: ${metric.label}`,
+      read: (i) => ({ title: fullDate(points[i].day), rows: [
+        { color: sport.color, value: metric.text(values[i]), label: "aktivita" },
+        { color: sport.color, value: metric.text(rolling[i]), label: `priemer ${ROLLING_ACTIVITIES}` }] }),
+    });
+    trend.append(legend([{ kind: "dot", color: sport.color, label: "aktivita" }, { kind: "line", color: sport.color, label: `priemer ${ROLLING_ACTIVITIES} aktivít` }]), chart,
+      table([{ label: "Deň" }, { label: metric.label, num: true }, { label: "Názov" }], points.slice().reverse().map((p) => [fullDate(p.day), metric.text(p.value), p.a.name])));
+  } else {
+    trend.append(h("p", { class: "note", text: `Graf sa zobrazí od ${MIN_TREND_POINTS} aktivít v období. Teraz ${points.length}, skús dlhšie obdobie.` }));
+  }
+
+  const monthly = !state.sportRange;
+  const firstDay = state.sportRange ? from : dayOf(all[0]);
+  const bucketOf = (day) => (monthly ? day.slice(0, 7) : mondayOf(day));
+  const bars = [];
+  for (let key2 = bucketOf(firstDay), guard = 0; key2 <= bucketOf(today) && guard < 2000; guard++) {
+    const inBar = list.filter((a) => bucketOf(dayOf(a)) === key2);
+    const value = inBar.reduce((sum, a) => sum + a.distance, 0) / 1000;
+    const title = monthly ? key2.split("-").reverse().join(". ") : `Týždeň od ${shortDate(key2)}`;
+    bars.push({ tick: monthly ? key2.slice(2).split("-").reverse().join("/") : shortDate(key2), title, total: value, parts: [{ color: sport.color, label: `${inBar.length}×`, value }] });
+    if (monthly) { const [y, m] = key2.split("-").map(Number); key2 = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, "0")}`; }
+    else key2 = addDays(key2, 7);
+  }
+  const volume = trendCard("Objem", monthly ? "Kilometre za mesiac" : "Kilometre za týždeň", bars.filter((b) => b.total), {
+    draw: (el) => barChart(el, { bars, label: `${sport.label}: objem`, format: (v) => `${num(v, 1)} km` }),
+    table: () => table([{ label: monthly ? "Mesiac" : "Týždeň" }, { label: "km", num: true }], bars.filter((b) => b.total).reverse().map((b) => [b.title, num(b.total, 1)])),
+  });
+
+  const records = sportRecords(sport, all);
+  const recordCard = h("section", { class: "card" }, h("h2", { text: "Rekordy" }), h("p", { class: "note", text: "Za celú históriu v Strave" }),
+    ...records.map((r) => h("a", { class: "record", href: `#/kalendar/${dayOf(r.a)}` },
+      h("div", { class: "main" }, h("div", { class: "title", text: r.label }), h("div", { class: "sub", text: `${shortDate(dayOf(r.a))} ${dayOf(r.a).slice(0, 4)}` })),
+      h("div", { class: "value" }, r.value, h("small", { text: r.a.name })))));
+
+  const recent = [...list].reverse().slice(0, 12);
+  const listCard = h("section", { class: "card" }, h("h2", { text: `Posledné aktivity (${list.length})` }), h("div", { class: "rows-plain" },
+    ...recent.map((a) => h("a", { class: "record", href: `#/kalendar/${dayOf(a)}` },
+      h("div", { class: "main" }, h("div", { class: "title", text: a.name }),
+        h("div", { class: "sub", text: [shortDate(dayOf(a)), hours(a.moving_time), a.total_elevation_gain ? `${num(a.total_elevation_gain)} m↑` : null].filter(Boolean).join(" · ") })),
+      h("div", { class: "value" }, `${num(a.distance / 1000, 1)} km`, h("small", { text: [sport.paceText(sport.pace(a)), a.average_heartrate ? `${num(a.average_heartrate)} bpm` : null].filter(Boolean).join(" · ") }))))));
+  if (!recent.length) listCard.append(h("div", { class: "empty", text: "V tomto období žiadna aktivita." }));
+
+  return [nav, filter, tiles, trend, h("div", { class: "grid2" }, volume, recordCard), listCard];
+}
 function strengthNav(active) {
   const link = (href, id, label) => h("a", { href, "aria-current": String(active === id), text: label });
   return h("div", { class: "seg subnav", role: "group", "aria-label": "Sekcie" },
@@ -1499,13 +1665,15 @@ function route() {
 }
 function tabs(page) {
   const tab = (id, href, label) => h("a", { href, text: label, ...(page === id ? { "aria-current": "page" } : {}) });
-  return h("nav", { class: "tabs" }, tab("prehlad", "#/", "Prehľad"), tab("sila", "#/sila", "Sila"), tab("kalendar", "#/kalendar", "Kalendár"));
+  return h("nav", { class: "tabs" }, tab("prehlad", "#/", "Prehľad"), tab("sila", "#/sila", "Sila"), tab("vytrvalost", "#/vytrvalost", "Vytrvalosť"), tab("kalendar", "#/kalendar", "Kalendár"));
 }
 function render() {
   const { page } = route();
   const head = h("header", {}, h("h1", { text: "Zdravie" }), h("button", { class: "link", text: "Odhlásiť", onclick: logout }));
   if (page === "sila") {
     app.replaceChildren(head, tabs(page), ...strengthView());
+  } else if (page === "vytrvalost") {
+    app.replaceChildren(head, tabs(page), ...sportView());
   } else if (page === "kalendar") {
     app.replaceChildren(head, tabs(page), ...calendarView());
   } else {
