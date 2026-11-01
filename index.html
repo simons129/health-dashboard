@@ -91,7 +91,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.name { white-space: normal; min-width: 140px; }
 @media (max-width: 560px) { th.name, td.name { display: none; } }
 .readiness { display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; margin-bottom: 8px; }
-.score { font-size: 56px; font-weight: 640; line-height: 1; }
+.score { font-size: 44px; font-weight: 640; line-height: 1; }
+.region { margin-top: 12px; }
+.region-head { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; margin-bottom: 4px; }
+.region-head span:last-child { color: var(--ink-2); }
+.meter { height: 8px; border-radius: 4px; background: var(--wash); overflow: hidden; }
+.meter i { display: block; height: 100%; border-radius: 4px; background: var(--hrv); }
 .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 2px; }
 .status i { width: 18px; height: 18px; border-radius: 50%; color: #fff; font: 700 12px/18px system-ui, sans-serif; text-align: center; }
 .status.warning i { color: #0b0b0b; }
@@ -132,9 +137,17 @@ const SPORT_NAMES = {
 };
 const READINESS_HISTORY = 130;
 const READINESS_DAYS = 30;
+// Hours until a muscle group is ready again after a one hour session. Strava's suffer score
+// follows heart rate and rates an hour of lifting about ten times lower than an hour of running.
+const REGIONS = [
+  { id: "upper", label: "Horná časť", hours: 48, words: /\b(upper|chest|back|shoulders?|arms?|lats|biceps?|triceps?|push|pull|forearms?)\b/i },
+  { id: "lower", label: "Spodná časť", hours: 72, words: /\b(lower|legs?|glutes?|posterior)\b/i },
+];
+const LEG_CARDIO_COST = 0.5;
+const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [] };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [] };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -214,32 +227,33 @@ async function loadReadiness() {
     items(`/api/apple_resting_heart_rate?gte.day=${from}&sort=day&order=asc&limit=1000`),
     items(`/api/strava_activities?gte.start_date_local=${from}&sort=start_date&order=asc&limit=1000&omit=map`),
   ]);
-  state.readiness = readinessSeries(from, hrv, resting, strava);
+  const signals = bodySignals(hrv, resting, strava);
+  state.readiness = readinessSeries(from, signals, strava);
+  state.recovery = recoverySeries(signals);
+  state.strength = strengthStatus(strava);
 }
 
-// Without overnight data a single day of HRV is noise: on two years of history neither morning
-// nor all-day HRV reacted to the previous day's training. The score therefore leans on training
-// load, and body signals count only as a 7 day trend against the personal baseline.
-function readinessSeries(from, hrv, resting, strava) {
-  const today = localDay(new Date());
-  const clamp = (v) => Math.max(0, Math.min(100, v));
-  const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
-  const spread = (values, m) => Math.sqrt(mean(values.map((v) => (v - m) ** 2))) || 1;
-  const trendZ = (series, day) => {
-    const pick = (lo, hi) => {
-      const out = [];
-      for (let i = lo; i <= hi; i++) {
-        const v = series.get(addDays(day, -i));
-        if (v != null) out.push(v);
-      }
-      return out;
-    };
-    const recent = pick(0, 6), base = pick(7, 66);
-    if (recent.length < 3 || base.length < 14) return null;
-    const m = mean(base);
-    return (median(recent) - m) / spread(base, m);
-  };
+const clamp = (v) => Math.max(0, Math.min(100, v));
+const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+const spread = (values, m) => Math.sqrt(mean(values.map((v) => (v - m) ** 2))) || 1;
 
+// Distance of the last recentDays from the personal baseline of the 60 days before them.
+function baselineZ(series, day, recentDays) {
+  const pick = (lo, hi) => {
+    const out = [];
+    for (let i = lo; i <= hi; i++) {
+      const v = series.get(addDays(day, -i));
+      if (v != null) out.push(v);
+    }
+    return out;
+  };
+  const recent = pick(0, recentDays - 1), base = pick(recentDays, recentDays + 59);
+  if (recent.length < Math.ceil(recentDays / 2) || base.length < 14) return null;
+  const m = mean(base);
+  return (median(recent) - m) / spread(base, m);
+}
+
+function bodySignals(hrv, resting, strava) {
   const busy = strava.map((a) => {
     const start = Date.parse(a.start_date);
     return [start - 18e5, start + a.elapsed_time * 1e3 + 54e5];
@@ -251,13 +265,25 @@ function readinessSeries(from, hrv, resting, strava) {
       .map(([, sample]) => Math.log(sample[0]));
     if (values.length) calmHrv.set(doc.day, median(values));
   }
-  const rest = new Map(resting.map((r) => [r.day, r.bpm]));
+  return { calmHrv, rest: new Map(resting.map((r) => [r.day, r.bpm])) };
+}
+
+function bodyScore(signals, day, recentDays) {
+  const hrvZ = baselineZ(signals.calmHrv, day, recentDays), restZ = baselineZ(signals.rest, day, recentDays);
+  const values = [hrvZ, restZ == null ? null : -restZ].filter((z) => z != null);
+  return values.length ? clamp(50 + 25 * mean(values)) : null;
+}
+
+// Without overnight data a single day of HRV is noise: on two years of history neither morning
+// nor all-day HRV reacted to the previous day's training. The score therefore leans on training
+// load, and body signals count only as a 7 day trend against the personal baseline.
+function readinessSeries(from, signals, strava) {
+  const today = localDay(new Date());
   const load = new Map();
   for (const a of strava) {
     const day = a.start_date_local.slice(0, 10);
     load.set(day, (load.get(day) ?? 0) + (a.suffer_score || duration(a) / 60));
   }
-
   const series = [];
   let acute = 0, chronic = 0;
   for (let day = from; day <= today; day = addDays(day, 1)) {
@@ -266,12 +292,44 @@ function readinessSeries(from, hrv, resting, strava) {
     if (daysBetween(day, today) >= READINESS_DAYS || chronic < 1) continue;
     const ratio = acute / chronic;
     const loadScore = clamp(100 - (ratio - 0.6) * 100);
-    const hrvZ = trendZ(calmHrv, day), restZ = trendZ(rest, day);
-    const signals = [hrvZ, restZ == null ? null : -restZ].filter((z) => z != null);
-    const bodyScore = signals.length ? clamp(50 + 25 * mean(signals)) : null;
-    series.push({ day, ratio, loadScore, bodyScore, score: Math.round(bodyScore == null ? loadScore : 0.6 * loadScore + 0.4 * bodyScore) });
+    const body = bodyScore(signals, day, 7);
+    series.push({ day, ratio, loadScore, bodyScore: body, score: Math.round(body == null ? loadScore : 0.6 * loadScore + 0.4 * body) });
   }
   return series;
+}
+
+// Same-day signals only, so it follows the day's HRV readings and can swing a lot.
+function recoverySeries(signals) {
+  const today = localDay(new Date());
+  const series = [];
+  for (let back = READINESS_DAYS - 1; back >= 0; back--) {
+    const day = addDays(today, -back);
+    const score = signals.calmHrv.has(day) ? bodyScore(signals, day, 1) : null;
+    if (score != null) series.push({ day, score: Math.round(score), hrv: Math.exp(signals.calmHrv.get(day)) });
+  }
+  return series;
+}
+
+function regionsOf(activity) {
+  const hit = REGIONS.filter((r) => r.words.test(activity.name));
+  return /full body/i.test(activity.name) || !hit.length ? REGIONS : hit;
+}
+
+function strengthStatus(strava, now = Date.now()) {
+  const week = now - 7 * 864e5;
+  return REGIONS.map((region) => {
+    let remaining = 0, sessions = 0;
+    for (const a of strava) {
+      const end = Date.parse(a.start_date) + a.elapsed_time * 1e3;
+      const lifting = a.sport_type === "WeightTraining" && regionsOf(a).includes(region);
+      const legCardio = region.id === "lower" && (["Run", "TrailRun", "Hike"].includes(a.sport_type) || (a.sport_type === "Ride" && a.suffer_score >= HARD_RIDE_SCORE));
+      if (!lifting && !legCardio) continue;
+      if (lifting && end >= week) sessions++;
+      const cost = lifting ? Math.max(0.75, Math.min(1.5, duration(a) / 3600)) : LEG_CARDIO_COST;
+      remaining = Math.max(remaining, region.hours * cost - (now - end) / 36e5);
+    }
+    return { ...region, sessions, remaining, score: Math.round(clamp(100 * (1 - remaining / region.hours))) };
+  });
 }
 function periods() {
   const today = localDay(new Date());
@@ -460,6 +518,60 @@ function table(columns, rows) {
 }
 
 /* Views */
+function statusBadge([tone, icon, verdict]) {
+  return h("div", { class: `status ${tone}` }, Object.assign(h("i", { text: icon }), { style: `background:var(--${tone})` }), verdict);
+}
+function strengthCard() {
+  const regions = state.strength;
+  const best = regions.reduce((a, b) => (b.score > a.score || (b.score === a.score && b.sessions < a.sessions) ? b : a));
+  const lowRecovery = state.recovery.at(-1)?.day === localDay(new Date()) && state.recovery.at(-1).score < 34;
+  const verdict = best.score >= 90 ? ["good", "✓", `Dnes: ${best.label}`]
+    : best.score >= 60 ? ["warning", "!", `Ľahšie: ${best.label}`]
+    : ["critical", "×", "Daj voľno alebo techniku"];
+  const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("div", {},
+    h("h2", { text: "Silový tréning" }),
+    h("p", { class: "note", text: "Podľa času od zaťaženia partie, názvu tréningu a dĺžky" }))));
+  card.append(h("div", { class: "readiness" },
+    h("div", { class: "score", text: String(best.score) }),
+    h("div", {}, statusBadge(verdict),
+      h("div", { class: "parts", text: lowRecovery ? "Recovery je dnes nízke, zváž menší objem." : `Za 7 dní: ${regions.map((r) => `${r.label.toLowerCase()} ${r.sessions}×`).join(", ")}` }))));
+  for (const region of regions) {
+    card.append(h("div", { class: "region" },
+      h("div", { class: "region-head" }, h("span", { text: region.label }),
+        h("span", { text: region.remaining > 0 ? `${region.score} %, ešte ${Math.ceil(region.remaining)} h` : "100 %, pripravená" })),
+      h("div", { class: "meter", role: "img", "aria-label": `${region.label}: ${region.score} percent` },
+        Object.assign(h("i"), { style: `width:${region.score}%` }))));
+  }
+  return card;
+}
+function recoveryCard() {
+  const list = state.recovery;
+  const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("div", {},
+    h("h2", { text: "Recovery" }),
+    h("p", { class: "note", text: "HRV dňa oproti tvojim 60 dňom. Bez nočných dát a mení sa počas dňa, jedno číslo neber vážne." }))));
+  if (!list.length) { card.append(h("div", { class: "empty", text: "Zatiaľ nie je dosť meraní HRV." })); return card; }
+  const now = list[list.length - 1];
+  const isToday = now.day === localDay(new Date());
+  const verdict = now.score >= 67 ? ["good", "✓", "Dobré"] : now.score >= 34 ? ["warning", "!", "Stredné"] : ["critical", "×", "Nízke"];
+  card.append(h("div", { class: "readiness" },
+    h("div", { class: "score", text: String(now.score) }),
+    h("div", {}, statusBadge(verdict),
+      h("div", { class: "parts", text: `${isToday ? "Dnes" : `Naposledy ${shortDate(now.day)}`}: HRV ${num(now.hrv)} ms` }))));
+  const start = list[0].day;
+  const chart = h("div", { class: "chart" });
+  card.append(chart);
+  chart.draw = () => lineChart(chart, {
+    height: 150, x: list.map((d) => daysBetween(start, d.day)), xMin: 0, xMax: daysBetween(start, now.day), xTicks: dateAxis(start, now.day),
+    series: [{ color: "var(--hrv)", values: list.map((d) => d.score) }],
+    label: "Recovery za posledných 30 dní",
+    read: (i) => ({ title: fullDate(list[i].day), rows: [
+      { color: "var(--hrv)", value: String(list[i].score), label: "recovery" },
+      { value: `${num(list[i].hrv)} ms`, label: "HRV" }] }),
+  });
+  card.append(table([{ label: "Deň" }, { label: "Recovery", num: true }, { label: "HRV (ms)", num: true }],
+    list.slice().reverse().map((d) => [fullDate(d.day), String(d.score), num(d.hrv)])));
+  return card;
+}
 function readinessCard() {
   const list = state.readiness;
   const card = h("section", { class: "card" });
@@ -467,11 +579,11 @@ function readinessCard() {
     h("p", { class: "note", text: "Odhad bez nočných dát: 60 % tréningová záťaž, 40 % 7-dňový trend. Sleduj vývoj, nie jeden deň." }))));
   if (!list.length) { card.append(h("div", { class: "empty", text: "Zatiaľ nie je dosť tréningov na výpočet." })); return card; }
   const now = list[list.length - 1];
-  const [tone, icon, verdict] = now.score >= 67 ? ["good", "✓", "Môžeš pridať"] : now.score >= 34 ? ["warning", "!", "Bežný tréning"] : ["critical", "×", "Uber"];
+  const verdict = now.score >= 67 ? ["good", "✓", "Môžeš pridať"] : now.score >= 34 ? ["warning", "!", "Bežný tréning"] : ["critical", "×", "Uber"];
   card.append(h("div", { class: "readiness" },
     h("div", { class: "score", text: String(now.score) }),
     h("div", {},
-      h("div", { class: `status ${tone}` }, Object.assign(h("i", { text: icon }), { style: `background:var(--${tone})` }), verdict),
+      statusBadge(verdict),
       h("div", { class: "parts", text: `Záťaž 7 dní oproti 6 týždňom: ${num(now.ratio, 2)}× (${num(now.loadScore)}/100)` }),
       h("div", { class: "parts", text: now.bodyScore == null ? "Trend tela: málo dát" : `Trend tela: ${num(now.bodyScore)}/100` }))));
   const start = list[0].day;
@@ -684,10 +796,10 @@ function filters() {
       state.day < today ? h("button", { "aria-label": "Nasledujúci deň", text: "›", onclick: () => selectDay(addDays(state.day, 1)) }) : null));
 }
 function render() {
-  const cards = [readinessCard(), dayCard(), h("div", { class: "grid2" }, hrvCard(), lowHrCard()), loadCard(), workoutsCard()];
+  const cards = [h("div", { class: "grid2" }, strengthCard(), recoveryCard()), readinessCard(), dayCard(), h("div", { class: "grid2" }, hrvCard(), lowHrCard()), loadCard(), workoutsCard()];
   app.replaceChildren(
     h("header", {}, h("h1", { text: "Zdravie" }), h("button", { class: "link", text: "Odhlásiť", onclick: logout })),
-    filters(), cards[0], tiles(), ...cards.slice(1));
+    filters(), cards[0], cards[1], tiles(), ...cards.slice(2));
   drawCharts();
 }
 function showError() {
