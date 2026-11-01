@@ -169,8 +169,25 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .day:hover { filter: brightness(1.12); }
 .day.today { box-shadow: inset 0 0 0 2px var(--ink); }
 .day[aria-current=true] { outline: 2px solid var(--ink); outline-offset: 1px; }
-.day.future { background: none; pointer-events: none; }
+.day.future { background: none; box-shadow: inset 0 0 0 1px var(--grid); color: var(--ink); }
+.day .planned { background: none; color: var(--ink); box-shadow: inset 0 0 0 2px var(--plan); }
 .show-more { width: 100%; margin-top: 10px; }
+.picker { margin-top: 12px; }
+.picker .seg { margin-bottom: 8px; flex-wrap: wrap; }
+.suggest { border-left: 3px solid var(--hrv); padding: 2px 0 2px 10px; margin: 8px 0 10px; }
+.suggest .title { font-weight: 620; }
+.suggest li { color: var(--ink-2); font-size: 13px; margin-top: 2px; }
+.suggest ul { margin: 4px 0 0; padding-left: 16px; }
+.pick-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); font-weight: 600; }
+.primary:hover { background: var(--ink); opacity: .85; }
+.plan { padding: 10px 0; border-top: 1px solid var(--grid); }
+.plan-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.plan .title { font-weight: 620; font-size: 13.5px; }
+.plan .state { color: var(--ink-2); font-size: 12.5px; white-space: nowrap; }
+.plan ul { margin: 4px 0 0; padding-left: 16px; color: var(--ink-2); font-size: 12.5px; }
+.plan .link { min-height: 28px; padding: 0; font-size: 12.5px; }
+.write-error { color: var(--ink); font-size: 13px; margin-top: 6px; }
 .visit { display: block; padding: 10px 0; border-top: 1px solid var(--grid); color: inherit; text-decoration: none; }
 .visit .title { font-weight: 600; font-size: 13.5px; }
 .visit .sub { color: var(--ink-2); font-size: 12.5px; }
@@ -252,6 +269,15 @@ const MUSCLES = [
   ["Hrudník", /bench press|chest press|fly|pec dec/i],
 ];
 const SPORT_RANGES = [[90, "3 mes."], [182, "6 mes."], [365, "1 rok"], [0, "Všetko"]];
+const FUTURE_WEEKS = 4;
+// Share of maximum heart rate.
+const ZONES = { easy: [0.65, 0.78], tempo: [0.84, 0.9], hard: [0.9, 0.95] };
+const PLAN_SPORTS = {
+  beh: { label: "Beh", mark: "🏃", color: "run", types: ["Run", "TrailRun", "VirtualRun"], options: [["easy", "Ľahký"], ["long", "Dlhý"], ["tempo", "Tempo"], ["intervals", "Intervaly"]] },
+  bicykel: { label: "Bicykel", mark: "🚴", color: "ride", types: ["Ride", "VirtualRide", "EBikeRide", "GravelRide", "MountainBikeRide"], options: [["easy", "Ľahká"], ["long", "Dlhá"], ["tempo", "Tempo"], ["intervals", "Intervaly"]] },
+  plavanie: { label: "Plávanie", mark: "🏊", color: "other", types: ["Swim"], options: [["sets", "Série"], ["endurance", "Vytrvalostné"], ["technique", "Technika"]] },
+  sila: { label: "Sila", mark: "S", color: "strength", types: ["WeightTraining"], options: [["upper", "Horná časť"], ["lower", "Spodná časť"], ["full", "Celé telo"]] },
+};
 const MIN_TREND_POINTS = 3;
 // Below this a 100 m pace is a lap the watch cut wrong, not real swimming.
 const FASTEST_PACE_100M = 60;
@@ -298,7 +324,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], plans: [], pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -347,6 +373,14 @@ const duration = (activity) => activity.moving_time || activity.elapsed_time;
 const clockShort = (seconds) => { const total = Math.round(seconds); return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`; };
 const mean = (values) => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 
+async function write(method, path, body) {
+  const res = await fetch(API + path, {
+    method,
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+}
 async function api(path) {
   const res = await fetch(API + path, { headers: { Authorization: `Bearer ${apiKey}` } });
   if (res.status === 401) { logout(); throw new Error("unauthorized"); }
@@ -374,7 +408,7 @@ async function loadDay() {
 const lastPerDay = (rows) => [...new Map(rows.map((r) => [r.day, r])).values()];
 async function loadBody() {
   const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
-  const [totals, rest, weight, vo2, fat, lean, swims] = await Promise.all([
+  const [totals, rest, weight, vo2, fat, lean, swims, plans] = await Promise.all([
     items("/api/apple_daily_totals?sort=date&order=desc&limit=1000"),
     items("/api/apple_resting_heart_rate?sort=day&order=asc&limit=1000"),
     items("/api/apple_weight?sort=day&order=asc&limit=1000"),
@@ -382,7 +416,9 @@ async function loadBody() {
     items("/api/apple_body_fat?sort=day&order=desc&limit=1"),
     items("/api/apple_lean_body_mass?sort=day&order=desc&limit=1"),
     api("/api/strava_swims?sort=start_date&order=desc&limit=1000").then((r) => r.items),
+    api("/api/plans?sort=day&order=asc&limit=1000").then((r) => r.items),
   ]);
+  state.plans = plans.map((doc) => ({ id: doc.id, ...doc.data }));
   state.swims = new Map(swims.map((doc) => [doc.id, swimSummary(doc.data)]));
   state.totals = new Map(totals.map((t) => [t.date, t]));
   state.rest = lastPerDay(rest);
@@ -1074,10 +1110,16 @@ function calendarStats(days) {
   };
 }
 function dayPanel(day, list) {
+  const today = localDay(new Date());
   const totals = state.totals.get(day);
   const daily = [totals?.steps ? `${num(totals.steps)} krokov` : null, totals?.active_calories ? `${num(totals.active_calories)} aktívnych kcal` : null].filter(Boolean).join(" · ");
   const card = h("section", { class: "card panel" }, h("h2", { text: fullDate(day) }), daily ? h("p", { class: "note", text: daily }) : null);
-  if (!list?.length) { card.append(h("p", { class: "note", text: "Bez tréningu." })); return card; }
+  card.append(...plansOn(day).map(planRow));
+  if (day >= today) card.append(h("div", { class: "group-head", text: "Pridať tréning" }), workoutPicker(null, day));
+  if (!list?.length) {
+    if (day < today) card.append(h("p", { class: "note", text: "Bez tréningu." }));
+    return card;
+  }
   for (const { activity: a, workout, mark } of list) {
     const label = a.sport_type === "WeightTraining" ? workout?.region ?? "Sila" : SPORT_NAMES[a.sport_type] ?? a.sport_type;
     const facts = [hours(duration(a)), a.distance ? `${num(a.distance / 1000, 1)} km` : null, a.average_heartrate ? `${num(a.average_heartrate)} bpm` : null].filter(Boolean).join(" · ");
@@ -1090,7 +1132,7 @@ function dayPanel(day, list) {
 function calendarView() {
   const today = localDay(new Date());
   const days = activityDays();
-  const selected = route().kind || [...days.keys()].sort().at(-1) || today;
+  const selected = route().kind || today;
   const stats = calendarStats(days);
   const groups = new Map(GROUPS.map((g) => [g.id, g]));
   const header = h("section", { class: "card" }, h("h2", { text: "Kalendár" }),
@@ -1105,7 +1147,7 @@ function calendarView() {
     ]));
   const grid = h("div", { class: "cal" }, h("span"), ...["Po", "Ut", "St", "Št", "Pi", "So", "Ne"].map((d) => h("span", { class: "head", text: d })), h("span"));
   const thisWeek = mondayOf(today);
-  for (let w = 0; w < state.weeks; w++) {
+  for (let w = -FUTURE_WEEKS; w < state.weeks; w++) {
     const monday = addDays(thisWeek, -7 * w);
     grid.append(h("span", { class: "week", text: shortDate(monday) }));
     let seconds = 0;
@@ -1114,16 +1156,19 @@ function calendarView() {
       const list = days.get(day) ?? [];
       seconds += list.reduce((sum, item) => sum + duration(item.activity), 0);
       const steps = state.totals.get(day)?.steps;
-      const summary = [...list.map((item) => item.group.label), steps ? `${num(steps)} krokov` : null].filter(Boolean).join(", ") || "bez aktivity";
+      const planned = plansOn(day).filter((plan) => !planDone(plan)).map((plan) => `plán: ${plan.title}`);
+      const summary = [...list.map((item) => item.group.label), ...planned, steps ? `${num(steps)} krokov` : null].filter(Boolean).join(", ") || "bez aktivity";
       grid.append(h("a", { class: `day${day === today ? " today" : ""}${day > today ? " future" : ""}`, href: `#/kalendar/${day}`,
         "aria-current": String(day === selected), "aria-label": `${shortDate(day)}: ${summary}`, title: `${shortDate(day)}: ${summary}` },
-        ...list.slice(0, 2).map((item) => h("span", { class: item.group.id === "other" ? "light" : "", style: `background:var(--${groups.get(item.group.id).id})`, text: item.mark }))));
+        ...list.slice(0, 2).map((item) => h("span", { class: item.group.id === "other" ? "light" : "", style: `background:var(--${groups.get(item.group.id).id})`, text: item.mark })),
+        ...plansOn(day).filter((plan) => !planDone(plan)).slice(0, 2 - Math.min(list.length, 2)).map((plan) =>
+          h("span", { class: "planned", style: `--plan:var(--${PLAN_SPORTS[plan.sport].color})`, text: PLAN_SPORTS[plan.sport].mark }))));
     }
     grid.append(h("span", { class: "count", text: seconds ? `${num(seconds / 3600, 1)} h` : "" }));
   }
   const oldest = [...days.keys()].sort()[0];
   const canExtend = oldest && addDays(thisWeek, -7 * state.weeks) > mondayOf(oldest);
-  const main = h("section", { class: "card" }, h("h2", { text: "Týždne" }), h("p", { class: "note", text: "Najnovšie hore, vpravo čas za týždeň. Klikni na deň." }), grid,
+  const main = h("section", { class: "card" }, h("h2", { text: "Týždne" }), h("p", { class: "note", text: "Najnovšie hore, vpravo čas za týždeň. Klikni na deň a naplánuj tréning." }), grid,
     canExtend ? h("button", { class: "show-more", text: "Zobraziť staršie", onclick: () => { state.weeks += CALENDAR_WEEKS; render(); } }) : null);
   return [header, h("div", { class: "calendar" }, main, dayPanel(selected, days.get(selected)))];
 }
@@ -1245,6 +1290,136 @@ function sportActivities(sport) {
     const swim = state.swims.get(String(a.id));
     return swim ? { ...a, moving_time: swim.swimSeconds, average_speed: a.distance / swim.swimSeconds, estimated: !swim.reliable } : a;
   }).sort((a, b) => a.start_date.localeCompare(b.start_date));
+}
+function trainingBase(key) {
+  const today = localDay(new Date());
+  const yearAgo = addDays(today, -365), sixWeeks = addDays(today, -42);
+  const hrMax = Math.max(0, ...state.activities.filter((a) => a.start_date_local >= yearAgo).map((a) => a.max_heartrate ?? 0));
+  const sport = SPORTS[key];
+  const recent = sport ? trendActivities(sport, sportActivities(sport)) : [];
+  const last = recent.slice(-10);
+  const middle = (values) => (values.length ? median(values) : null);
+  return {
+    hrMax, sport, typicalMinutes: middle(last.map((a) => a.moving_time / 60)),
+    pace: last.length && sport ? middle(last.map(sport.pace)) : null, lastHr: middle(last.filter((a) => a.average_heartrate).map((a) => a.average_heartrate)),
+    longestMinutes: Math.max(0, ...recent.filter((a) => a.start_date_local >= sixWeeks).map((a) => a.moving_time / 60)),
+  };
+}
+const fiveMinutes = (minutes, low, high) => Math.round(Math.max(low, Math.min(high, minutes ?? low)) / 5) * 5;
+function workoutSuggestion(key, type) {
+  const { hrMax, pace, typicalMinutes, longestMinutes, lastHr } = trainingBase(key);
+  const zone = (name) => (hrMax ? `${Math.round(hrMax * ZONES[name][0])}–${Math.round(hrMax * ZONES[name][1])} bpm` : "podľa pocitu");
+  const option = PLAN_SPORTS[key].options.find(([id]) => id === type) ?? PLAN_SPORTS[key].options[0];
+  const label = option[1];
+  const run = (offset) => (pace ? `${clockShort(pace + offset)} /km` : "podľa pocitu");
+
+  if (key === "beh") {
+    if (option[0] === "easy") {
+      const minutes = fiveMinutes(typicalMinutes * 0.75, 30, 60);
+      return { title: `${label} beh ${minutes} min`, steps: [`Tep ${zone("easy")}, tempo okolo ${run(40)}`, lastHr && hrMax && lastHr > hrMax * ZONES.easy[1] ? `Tvoje behy majú priemer ${Math.round(lastHr)} bpm, tu pokojne spomaľ a kľudne aj choď` : "Musíš vedieť rozprávať v celých vetách"] };
+    }
+    if (option[0] === "long") {
+      const minutes = fiveMinutes(Math.min(longestMinutes * 1.1, longestMinutes + 15), 60, 150);
+      return { title: `${label} beh ${minutes} min`, steps: [`Tep ${zone("easy")}, tempo okolo ${run(50)}`, `Dlhší ako tvoj najdlhší beh za 6 týždňov (${Math.round(longestMinutes)} min) približne o 10 %`] };
+    }
+    if (option[0] === "tempo") return { title: "Tempový beh 45 min", steps: ["10 min rozklus", `20 min tempo ${run(-25)}, tep ${zone("tempo")}`, "15 min vyklus"] };
+    return { title: "Intervaly 6 × 3 min", steps: ["10 min rozklus", `6 × 3 min ${run(-50)}, tep ${zone("hard")}`, "Medzi nimi 2 min pokojný klus", "10 min vyklus"] };
+  }
+  if (key === "bicykel") {
+    if (option[0] === "easy") {
+      const minutes = fiveMinutes(typicalMinutes * 0.75, 45, 90);
+      return { title: `${label} jazda ${minutes} min`, steps: [`Tep ${zone("easy")}`, "Rovinatá trasa, vyššia kadencia"] };
+    }
+    if (option[0] === "long") {
+      const minutes = fiveMinutes(Math.min(longestMinutes * 1.1, longestMinutes + 30), 90, 300);
+      return { title: `${label} jazda ${minutes} min`, steps: [`Tep ${zone("easy")}`, `Najdlhšia jazda za 6 týždňov mala ${Math.round(longestMinutes)} min`, "Pi a jedz priebežne"] };
+    }
+    if (option[0] === "tempo") return { title: "Tempová jazda 70 min", steps: ["15 min rozjazd", `2 × 20 min, tep ${zone("tempo")}`, "Medzi nimi 5 min ľahko", "10 min vyjazd"] };
+    return { title: "Intervaly 4 × 8 min", steps: ["15 min rozjazd", `4 × 8 min, tep ${zone("hard")}`, "Medzi nimi 4 min ľahko", "10 min vyjazd"] };
+  }
+  if (key === "plavanie") {
+    const swim = [...state.swims.values()].filter((x) => x.reliable && x.sets.length).sort((a, b) => b.day.localeCompare(a.day))[0];
+    const main = swim ? swim.sets.reduce((a, b) => (b.repeats * b.distance > a.repeats * a.distance ? b : a)) : null;
+    if (option[0] === "sets") {
+      return main
+        ? { title: `Série ${main.repeats + 1} × ${main.distance} m`, steps: ["300 m rozplávanie", `${main.repeats + 1} × ${main.distance} m v čase ${clockShort(main.swim)}, pauza ${clockShort(main.rest || 30)}`, "200 m vyplávanie"] }
+        : { title: "Série 10 × 50 m", steps: ["300 m rozplávanie", "10 × 50 m, pauza 0:30", "200 m vyplávanie"] };
+    }
+    if (option[0] === "endurance") return { title: "Vytrvalostné 4 × 200 m", steps: ["300 m rozplávanie", `4 × 200 m${swim?.pace ? ` v tempe ${clockShort(swim.pace + 5)} /100 m` : ""}, pauza 0:30`, "200 m vyplávanie"] };
+    return { title: "Technika 1 500 m", steps: ["300 m rozplávanie", "8 × 50 m technické cvičenia, pauza 0:30", "6 × 100 m pokojne, sústreď sa na dlhý záber", "200 m vyplávanie"] };
+  }
+  return { title: `Sila: ${label}`, steps: ["Cviky a cieľové váhy nájdeš v záložke Sila → Dnes"] };
+}
+function recommendedType(key) {
+  if (key === "sila") return null;
+  return recoveryIsLow() ? PLAN_SPORTS[key].options[key === "plavanie" ? 2 : 0][0] : null;
+}
+async function addPlan(day, sport, type) {
+  const suggestion = workoutSuggestion(sport, type);
+  const plan = { day, sport, type, title: suggestion.title, steps: suggestion.steps };
+  const id = crypto.randomUUID();
+  try {
+    await write("PUT", `/api/plans/${id}`, plan);
+    state.plans = [...state.plans, { id, ...plan }].sort((a, b) => a.day.localeCompare(b.day));
+    state.planError = "";
+  } catch {
+    state.planError = "Tréning sa nepodarilo uložiť. Skús to znova.";
+  }
+  render();
+}
+async function removePlan(id) {
+  try {
+    await write("DELETE", `/api/plans/${id}`);
+    state.plans = state.plans.filter((plan) => plan.id !== id);
+    state.planError = "";
+  } catch {
+    state.planError = "Tréning sa nepodarilo zmazať. Skús to znova.";
+  }
+  render();
+}
+function planDone(plan) {
+  const types = PLAN_SPORTS[plan.sport].types;
+  return state.activities.some((a) => a.start_date_local.slice(0, 10) === plan.day && types.includes(a.sport_type));
+}
+function plansOn(day) {
+  return state.plans.filter((plan) => plan.day === day);
+}
+function planRow(plan) {
+  const today = localDay(new Date());
+  const status = planDone(plan) ? "✓ Splnené" : plan.day < today ? "Nesplnené" : "Naplánované";
+  return h("div", { class: "plan" },
+    h("div", { class: "plan-head" }, h("span", { class: "title", text: `${PLAN_SPORTS[plan.sport].mark} ${plan.title}` }), h("span", { class: "state", text: status })),
+    h("ul", {}, ...plan.steps.map((step) => h("li", { text: step }))),
+    h("button", { class: "link", text: "Odstrániť", onclick: () => removePlan(plan.id) }));
+}
+// Sport and type stay selectable everywhere, the day comes from the calendar or a date field.
+function workoutPicker(fixedSport, fixedDay) {
+  const today = localDay(new Date());
+  const sportKey = fixedSport ?? state.pick.sport;
+  const options = PLAN_SPORTS[sportKey].options;
+  const day = fixedDay ?? state.pickDay ?? today;
+  const recommended = day === today ? recommendedType(sportKey) : null;
+  const type = options.some(([id]) => id === state.pick.type) ? state.pick.type : recommended ?? options[0][0];
+  const suggestion = workoutSuggestion(sportKey, type);
+  const box = h("div", { class: "picker" });
+  if (!fixedSport) {
+    box.append(h("div", { class: "seg", role: "group", "aria-label": "Šport" }, ...Object.entries(PLAN_SPORTS).map(([id, item]) =>
+      h("button", { "aria-pressed": String(id === sportKey), text: item.label, onclick: () => { state.pick = { sport: id, type: null }; render(); } }))));
+  }
+  box.append(h("div", { class: "seg", role: "group", "aria-label": "Typ tréningu" }, ...options.map(([id, label]) =>
+    h("button", { "aria-pressed": String(id === type), text: id === recommended ? `${label} ✓` : label, onclick: () => { state.pick = { ...state.pick, type: id }; render(); } }))),
+    h("div", { class: "suggest" }, h("div", { class: "title", text: suggestion.title }), h("ul", {}, ...suggestion.steps.map((step) => h("li", { text: step })))));
+  if (recommended) box.append(h("p", { class: "hint", text: "Recovery je dnes nízke, preto odporúčam ľahký tréning (✓)." }));
+  const add = h("button", { class: "primary", text: "Pridať do kalendára", onclick: () => addPlan(day, sportKey, type) });
+  box.append(h("div", { class: "pick-row" },
+    fixedDay ? null : h("input", { type: "date", value: day, min: today, "aria-label": "Deň tréningu", onchange: (event) => { state.pickDay = event.target.value || null; render(); } }), add));
+  if (state.planError) box.append(h("p", { class: "write-error", text: state.planError }));
+  return box;
+}
+function todayPlanCard() {
+  const plans = plansOn(localDay(new Date()));
+  if (!plans.length) return null;
+  return h("section", { class: "card" }, h("h2", { text: "Dnes v pláne" }), ...plans.map(planRow));
 }
 function swimCard(swim) {
   const card = h("section", { class: "card" }, h("h2", { text: `Série, ${fullDate(swim.day)}` }),
@@ -1400,7 +1575,9 @@ function sportView() {
 
   const swims = key === "plavanie" ? [...state.swims.values()].sort((a, b) => b.day.localeCompare(a.day)) : [];
   const swim = swims.find((x) => x.id === route().id) ?? swims[0];
-  return [nav, filter, tiles, swim ? swimCard(swim) : null, trend, h("div", { class: "grid2" }, volume, recordCard), listCard].filter(Boolean);
+  const planner = h("section", { class: "card" }, h("h2", { text: "Tréning na dnes" }),
+    h("p", { class: "note", text: "Vyber typ, návrh vychádza z tvojich posledných tréningov." }), workoutPicker(key, null));
+  return [nav, planner, filter, tiles, swim ? swimCard(swim) : null, trend, h("div", { class: "grid2" }, volume, recordCard), listCard].filter(Boolean);
 }
 function strengthNav(active) {
   const link = (href, id, label) => h("a", { href, "aria-current": String(active === id), text: label });
@@ -1753,7 +1930,7 @@ function render() {
         measureCard("VO2 Max", "Kondícia podľa Apple Watch", state.vo2, "vo2_ml_per_min_per_kg", 1, "ml/kg/min", "var(--strength)")),
       h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")),
       loadCard(), workoutsCard()];
-    app.replaceChildren(head, tabs(page), filters(), ...cards.slice(0, 2), tiles(), ...cards.slice(2));
+    app.replaceChildren(head, tabs(page), filters(), ...[todayPlanCard(), ...cards.slice(0, 2), tiles(), ...cards.slice(2)].filter(Boolean));
   }
   drawCharts();
 }
