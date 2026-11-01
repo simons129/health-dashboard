@@ -129,7 +129,16 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .badge { border: 1px solid var(--hrv); border-radius: 5px; padding: 0 5px; font-size: 11.5px; color: var(--ink); }
 .sets { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .sets span { background: var(--wash); border-radius: 5px; padding: 1px 7px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.subnav { margin-bottom: 12px; }
+.subnav { margin-bottom: 12px; max-width: 100%; overflow-x: auto; white-space: nowrap; }
+.subnav a { flex: none; }
+.group-head { color: var(--ink-2); font-size: 12.5px; font-weight: 600; margin: 14px 0 2px; }
+.record { display: flex; gap: 10px; align-items: center; padding: 8px; margin: 0 -8px; border-top: 1px solid var(--grid); border-radius: 7px; color: inherit; text-decoration: none; }
+.record:hover { background: var(--wash); }
+.record .main { min-width: 0; flex: 1; }
+.record .title { font-weight: 600; font-size: 13.5px; }
+.record .sub { color: var(--ink-2); font-size: 12.5px; }
+.record .value { flex: none; text-align: right; font-size: 13.5px; font-weight: 620; }
+.record .value small { display: block; color: var(--ink-2); font-size: 12px; font-weight: 450; }
 .plan-line { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
 .plan-line b { color: var(--ink); font-size: 14px; font-weight: 640; }
 .muscle { display: grid; grid-template-columns: 76px minmax(0, 1fr) 112px; gap: 10px; align-items: center; margin-top: 9px; font-size: 13px; }
@@ -241,6 +250,7 @@ const MUSCLES = [
   ["Chrbát", /pull.?down|pull-up|row\b|pullover|back extension/i],
   ["Hrudník", /bench press|chest press|fly|pec dec/i],
 ];
+const RECORD_DAYS = 30;
 const TREND_DAYS = 28;
 const TREND_THRESHOLD = 2.5;
 // A month cannot change strength this much, it means another machine or a logging mistake.
@@ -809,11 +819,14 @@ function exerciseIndex() {
       const weighted = e.sets.filter((set) => set.kg);
       const top = weighted.reduce((a, b) => (!a || b.kg > a.kg || (b.kg === a.kg && b.reps > a.reps) ? b : a), null);
       const best = Math.max(0, ...entry.sessions.map((p) => p.top?.kg ?? 0));
+      const bestOrm = Math.max(0, ...entry.sessions.map((p) => p.orm));
+      const orm = Math.max(0, ...weighted.map((set) => set.kg * (1 + set.reps / 30)));
       entry.sessions.push({
-        workout, sets: e.sets, top,
+        workout, sets: e.sets, top, best, bestOrm,
         record: !!top && entry.sessions.some((p) => p.top) && top.kg > best,
+        ormRecord: !!top && entry.sessions.some((p) => p.top) && orm > bestOrm + 0.05,
         change: top && best ? top.kg - entry.sessions.findLast((p) => p.top).top.kg : null,
-        orm: Math.max(0, ...weighted.map((set) => set.kg * (1 + set.reps / 30))),
+        orm,
         volume: weighted.reduce((sum, set) => sum + set.kg * set.reps * (set.perSide ? 2 : 1), 0),
         reps: Math.max(0, ...e.sets.map((set) => set.reps ?? 0)),
       });
@@ -1074,10 +1087,66 @@ function progressView(index) {
     odd.length ? trendGroup("Skontroluj", "Príliš veľká zmena, pravdepodobne iný stroj alebo chyba v zápise. Do hodnotenia sa nerátajú.", odd) : null,
   ].filter(Boolean);
 }
+function recentRecords(index) {
+  const today = localDay(new Date());
+  const rows = [];
+  let suspicious = 0;
+  for (const entry of index.values()) {
+    for (const p of entry.sessions) {
+      if (!(p.record || p.ormRecord) || daysBetween(p.workout.day, today) >= RECORD_DAYS) continue;
+      // A jump like this is another machine or a logging mistake, not a new best.
+      if (p.bestOrm && ((p.orm - p.bestOrm) / p.bestOrm) * 100 > SUSPICIOUS_CHANGE) { suspicious++; continue; }
+      rows.push({ name: entry.name, day: p.workout.day, top: p.top, weight: p.record, gain: p.record ? p.top.kg - p.best : p.orm - p.bestOrm, orm: p.orm });
+    }
+  }
+  return { rows: rows.sort((a, b) => b.day.localeCompare(a.day) || b.gain - a.gain), suspicious };
+}
+function bestByMuscle(index) {
+  const groups = new Map(MUSCLES.map(([name]) => [name, []]));
+  for (const entry of index.values()) {
+    const sessions = entry.sessions.filter((p) => p.top);
+    const group = groups.get(muscleOf(entry.name));
+    if (!group || !sessions.length) continue;
+    const heaviest = sessions.reduce((a, b) => (b.top.kg > a.top.kg || (b.top.kg === a.top.kg && b.top.reps >= a.top.reps) ? b : a));
+    group.push({ name: entry.name, heaviest, orm: Math.max(...sessions.map((p) => p.orm)), count: sessions.length });
+  }
+  for (const group of groups.values()) group.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return groups;
+}
+function recordsView(index) {
+  const { rows, suspicious } = recentRecords(index);
+  const lifts = [...index.values()].filter((e) => e.sessions.some((p) => p.top)).length;
+  const summary = h("section", { class: "card" }, h("h2", { text: `Nové rekordy za ${RECORD_DAYS} dní` }),
+    h("p", { class: "note", text: "Váha alebo odhad 1RM vyšší než v ktoromkoľvek predošlom tréningu. Prvé vykonanie cviku sa neráta." }),
+    h("div", { class: "facts" },
+      fact("Rekordy", String(rows.length)),
+      fact("Váhové", String(rows.filter((r) => r.weight).length)),
+      fact("Cviky s rekordom", `${new Set(rows.map((r) => r.name)).size} z ${lifts}`)));
+  if (!rows.length) summary.append(h("div", { class: "empty", text: "V tomto období nie je nový rekord." }));
+  for (const r of rows) {
+    summary.append(h("a", { class: "record", href: exerciseHref(r.name) },
+      h("div", { class: "main" }, h("div", { class: "title", text: r.name }), h("div", { class: "sub", text: `${shortDate(r.day)} · ${r.weight ? "váha" : "odhad 1RM"}` })),
+      h("div", { class: "value" }, r.weight ? setLabel(r.top) : `${num(r.orm)} kg`, h("small", { text: r.weight ? signed(r.gain) : `+${num(r.gain, 1)} kg z ${setLabel(r.top)}` }))));
+  }
+  if (suspicious) summary.append(h("p", { class: "hint", text: `${plural(suspicious, "rekord skrytý", "rekordy skryté", "rekordov skrytých")} pre príliš veľký skok, pravdepodobne iný stroj.` }));
+
+  const all = h("section", { class: "card" }, h("h2", { text: "Najlepšie výkony" }),
+    h("p", { class: "note", text: "Najvyššia váha a najlepší odhad 1RM pri každom cviku, podľa partií." }));
+  for (const [muscle, list] of bestByMuscle(index)) {
+    if (!list.length) continue;
+    all.append(h("div", { class: "group-head", text: muscle }));
+    for (const r of list) {
+      all.append(h("a", { class: "record", href: exerciseHref(r.name) },
+        h("div", { class: "main" }, h("div", { class: "title", text: r.name }), h("div", { class: "sub", text: `${shortDate(r.heaviest.workout.day)} · ${r.count}×` })),
+        h("div", { class: "value" }, setLabel(r.heaviest.top), h("small", { text: `1RM ${num(r.orm)} kg` }))));
+    }
+  }
+  return [h("div", { class: "grid2" }, summary, all)];
+}
 function strengthNav(active) {
   const link = (href, id, label) => h("a", { href, "aria-current": String(active === id), text: label });
   return h("div", { class: "seg subnav", role: "group", "aria-label": "Sekcie" },
-    link("#/sila", "dnes", "Dnes"), link("#/sila/progres", "progres", "Progres"), link("#/sila/treningy", "treningy", "Tréningy"), link("#/sila/cviky", "cviky", "Cviky"));
+    link("#/sila", "dnes", "Dnes"), link("#/sila/progres", "progres", "Progres"), link("#/sila/rekordy", "rekordy", "Rekordy"), link("#/sila/treningy", "treningy", "Tréningy"), link("#/sila/cviky", "cviky", "Cviky"));
 }
 function strengthView() {
   const { kind, id } = route();
@@ -1088,6 +1157,7 @@ function strengthView() {
   const showExercises = kind === "cviky" || !!entry;
   const hasDetail = !!(workout || entry);
   if (kind === "progres") return [strengthNav("progres"), ...progressView(index)];
+  if (kind === "rekordy") return [strengthNav("rekordy"), ...recordsView(index)];
   if (!kind) return [strengthNav("dnes"), h("div", { class: "grid2" }, strengthCard(false), muscleCard()), planCard(index)];
 
   const list = h("div", { class: "rows" });
