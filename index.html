@@ -291,9 +291,14 @@ const MUSCLES = [
 ];
 const SPORT_RANGES = [[90, "3 mes."], [182, "6 mes."], [365, "1 rok"], [0, "Všetko"]];
 const FUTURE_WEEKS = 4;
-// Strength first for the winter. Monday is day 0, Sunday stays free, the same part never
-// repeats inside its recovery time and the second run sits after upper body work.
-const WEEK_TEMPLATE = [[0, "sila", "upper"], [1, "beh", "easy"], [2, "sila", "lower"], [3, "plavanie", "sets"], [4, "sila", "upper"], [4, "beh", "easy"], [5, "sila", "lower"]];
+// Strength first for the winter: what a week should hold, not on which days.
+const WEEK_GOALS = { upper: 2, lower: 2, beh: 2, plavanie: 1 };
+const SESSION_TYPES = { upper: ["sila", "upper"], lower: ["sila", "lower"], beh: ["beh", "easy"], plavanie: ["plavanie", "sets"] };
+const REST_GAP_DAYS = { upper: 2, lower: 3 };
+const LOOKBACK_DAYS = 3;
+// Costs of a week. Only a broken rest gap is worth skipping a session for.
+const COST = { skipped: 30, forbidden: 100, double: 5, doubleLower: 20, noFreeDay: 12, runBeforeLower: 3, runAfterLower: 1, sunday: 4 };
+const MIN_DAYS_TO_PLAN = 2;
 const WEEKDAY_NAMES = ["Po", "Ut", "St", "Št", "Pi", "So", "Ne"];
 // Share of maximum heart rate.
 const ZONES = { easy: [0.65, 0.78], tempo: [0.84, 0.9], hard: [0.9, 0.95] };
@@ -1539,30 +1544,89 @@ function weekDates(offset) {
   return Array.from({ length: 7 }, (_, i) => addDays(monday, i));
 }
 function weekGoals() {
-  const goals = {};
-  for (const [, sport] of WEEK_TEMPLATE) goals[sport] = (goals[sport] ?? 0) + 1;
-  return goals;
+  return { sila: WEEK_GOALS.upper + WEEK_GOALS.lower, beh: WEEK_GOALS.beh, plavanie: WEEK_GOALS.plavanie };
 }
 function activitiesIn(days, sport) {
   const types = PLAN_SPORTS[sport].types;
   return state.activities.filter((a) => days.includes(a.start_date_local.slice(0, 10)) && types.includes(a.sport_type));
 }
-// Only what is still open: finished training and plans already in the calendar use up the goal.
+// Everything already in a day: finished training and plans, with full body counting as both parts.
+function daySessions(day) {
+  const sessions = [];
+  const sportOf = (sport, regions) => (sport === "sila" ? regions.forEach((region) => sessions.push(region)) : sessions.push(sport));
+  const types = Object.entries(PLAN_SPORTS);
+  for (const a of state.activities.filter((x) => x.start_date_local.slice(0, 10) === day)) {
+    const sport = types.find(([, item]) => item.types.includes(a.sport_type))?.[0];
+    if (!sport) continue;
+    const workout = sport === "sila" ? state.workouts.find((w) => w.id === String(a.id)) : null;
+    sportOf(sport, workout?.region === "Celé telo" ? ["upper", "lower"] : [workout?.region === "Spodná časť" ? "lower" : "upper"]);
+  }
+  for (const plan of plansOn(day).filter((x) => !planDone(x))) {
+    if (day < localDay(new Date())) continue;
+    sportOf(plan.sport, plan.type === "full" ? ["upper", "lower"] : [plan.type]);
+  }
+  return sessions;
+}
+function weekOpen(days) {
+  const today = localDay(new Date());
+  if (days.filter((day) => day >= today).length < MIN_DAYS_TO_PLAN) return [];
+  const left = { ...WEEK_GOALS };
+  for (const day of days) for (const session of daySessions(day)) if (left[session] != null) left[session]--;
+  return Object.entries(left).flatMap(([session, count]) => Array(Math.max(count, 0)).fill(session));
+}
+function weekCost(days, placed, skipped) {
+  const timeline = Array.from({ length: LOOKBACK_DAYS }, (_, i) => addDays(days[0], i - LOOKBACK_DAYS)).concat(days);
+  const fixed = timeline.map(daySessions);
+  const added = timeline.map(() => []);
+  placed.forEach(({ session, index }) => added[index + LOOKBACK_DAYS].push(session));
+  const all = fixed.map((list, i) => [...list, ...added[i]]);
+  let cost = skipped * COST.skipped;
+  all.forEach((list, i) => {
+    if (i < LOOKBACK_DAYS) return;
+    const isNew = added[i].length > 0;
+    if (isNew && list.length === 2) cost += COST.double + (list.includes("lower") ? COST.doubleLower : 0);
+    if (isNew && list.length > 2) cost += COST.forbidden * (list.length - 2);
+    if (isNew && new Set(list).size < list.length) cost += COST.forbidden;
+    if (i === timeline.length - 1 && list.length) cost += COST.sunday;
+    if (list.includes("beh") && all[i + 1]?.includes("lower") && (added[i].includes("beh") || added[i + 1].includes("lower"))) cost += COST.runBeforeLower;
+    if (added[i].includes("beh") && all[i - 1].includes("lower")) cost += COST.runAfterLower;
+    for (const session of added[i]) {
+      const gap = REST_GAP_DAYS[session];
+      if (!gap) continue;
+      for (let j = Math.max(0, i - gap + 1); j <= Math.min(all.length - 1, i + gap - 1); j++) {
+        if (j !== i && all[j].includes(session)) cost += COST.forbidden;
+      }
+    }
+  });
+  if (!all.slice(LOOKBACK_DAYS).some((list) => !list.length)) cost += COST.noFreeDay;
+  return cost;
+}
+// Few sessions and few days, so trying every placement is simple and instant. Equal sessions are
+// placed in day order to skip mirrored weeks.
 function weekProposal(days) {
   const today = localDay(new Date());
-  const open = weekGoals();
-  for (const sport of Object.keys(open)) {
-    open[sport] -= activitiesIn(days, sport).length;
-    open[sport] -= state.plans.filter((plan) => plan.sport === sport && days.includes(plan.day) && plan.day >= today && !planDone(plan)).length;
-  }
-  const proposal = [];
-  for (const [index, sport, type] of WEEK_TEMPLATE) {
-    if (days[index] < today || open[sport] <= 0) continue;
-    if (state.plans.some((plan) => plan.day === days[index] && plan.sport === sport)) continue;
-    open[sport]--;
-    proposal.push({ day: days[index], sport, type });
-  }
-  return proposal;
+  const items = weekOpen(days);
+  const open = days.map((day, index) => ({ day, index })).filter(({ day }) => day >= today);
+  let best = null;
+  const place = (position, placed, skipped, lowest) => {
+    if (position === items.length) {
+      const cost = weekCost(days, placed, skipped);
+      if (!best || cost < best.cost) best = { cost, placed: [...placed] };
+      return;
+    }
+    const session = items[position];
+    const from = items[position - 1] === session ? lowest : -1;
+    place(position + 1, placed, skipped + 1, from);
+    for (const { index } of open) {
+      if (index < from) continue;
+      placed.push({ session, index });
+      place(position + 1, placed, skipped, index);
+      placed.pop();
+    }
+  };
+  place(0, [], 0, -1);
+  return (best?.placed ?? []).map(({ session, index }) => ({ day: days[index], sport: SESSION_TYPES[session][0], type: SESSION_TYPES[session][1] }))
+    .sort((a, b) => a.day.localeCompare(b.day));
 }
 async function saveProposal() {
   const items = state.proposal;
@@ -1612,7 +1676,7 @@ function weekCard() {
 
   if (state.weekView === 0) card.append(...plansOn(today).map(planRow));
 
-  const offer = weekProposal(days);
+  const offer = weekOpen(days);
   if (state.proposal) {
     const box = h("div", { class: "proposal" }, h("div", { class: "group-head", text: "Návrh plánu" }));
     state.proposal.forEach((item, index) => {
@@ -1625,8 +1689,8 @@ function weekCard() {
       h("button", { class: "primary", text: "Uložiť do kalendára", ...(state.proposal.length ? {} : { disabled: "" }), onclick: saveProposal }),
       h("button", { text: "Zrušiť", onclick: () => { state.proposal = null; render(); } })));
   } else if (offer.length) {
-    card.append(h("div", { class: "week-actions" }, h("button", { class: "primary", text: "Naplánovať týždeň", onclick: () => { state.proposal = offer; render(); } })));
-  } else if (state.weekView === 0 && weekProposal(weekDates(1)).length) {
+    card.append(h("div", { class: "week-actions" }, h("button", { class: "primary", text: "Naplánovať týždeň", onclick: () => { state.proposal = weekProposal(days); render(); } })));
+  } else if (state.weekView === 0 && weekOpen(weekDates(1)).length) {
     card.append(h("div", { class: "week-actions" }, h("button", { class: "primary", text: "Naplánovať budúci týždeň", onclick: () => { state.weekView = 1; state.proposal = weekProposal(weekDates(1)); render(); } })));
   } else {
     card.append(h("p", { class: "hint", text: "Týždeň je naplánovaný." }));
