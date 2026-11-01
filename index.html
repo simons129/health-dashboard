@@ -195,6 +195,11 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .proposal-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13.5px; min-height: 32px; }
 .proposal-row .link { font-size: 12.5px; min-height: 28px; }
 .week-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.zones { display: flex; gap: 2px; height: 14px; border-radius: 4px; overflow: hidden; margin: 8px 0 4px; }
+.zones.small { height: 8px; margin: 5px 0 0; }
+.zones i { display: block; min-width: 2px; }
+.zone-sums { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; color: var(--ink-2); }
+.zone-sums b { color: var(--ink); font-weight: 640; }
 .write-error { color: var(--ink); font-size: 13px; margin-top: 6px; }
 .visit { display: block; padding: 10px 0; border-top: 1px solid var(--grid); color: inherit; text-decoration: none; }
 .visit .title { font-weight: 600; font-size: 13.5px; }
@@ -290,6 +295,17 @@ const PLAN_SPORTS = {
   plavanie: { label: "Plávanie", mark: "🏊", color: "other", types: ["Swim"], options: [["sets", "Série"], ["endurance", "Vytrvalostné"], ["technique", "Technika"]] },
   sila: { label: "Sila", mark: "S", color: "strength", types: ["WeightTraining"], options: [["upper", "Horná časť"], ["lower", "Spodná časť"], ["full", "Celé telo"]] },
 };
+const INTENSITY_WEEKS = [[4, "4 týždne"], [8, "8 týždňov"], [12, "12 týždňov"]];
+const INTENSITY_PAGE = 30;
+const INTENSITY_SPORTS = ["beh", "bicykel"];
+// A gap longer than this is a lost signal, not a minute at the same heart rate.
+const MAX_SAMPLE_GAP = 60;
+const MIN_HR_COVERAGE = 0.5;
+const INTENSITY_ZONES = [
+  { id: "easy", label: "Ľahké", color: "var(--strength)" },
+  { id: "moderate", label: "Stredné", color: "var(--other)" },
+  { id: "hard", label: "Náročné", color: "var(--run)" },
+];
 const MIN_TREND_POINTS = 3;
 // Below this a 100 m pace is a lap the watch cut wrong, not real swimming.
 const FASTEST_PACE_100M = 60;
@@ -336,7 +352,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -1530,6 +1546,100 @@ function weekCard() {
   if (state.planError) card.append(h("p", { class: "write-error", text: state.planError }));
   return card;
 }
+// Heart rate samples are heavy, so they load only when this page opens, a page at a time.
+async function loadIntensity() {
+  const weeks = Math.max(...INTENSITY_WEEKS.map(([w]) => w));
+  const from = addDays(localDay(new Date()), -7 * weeks);
+  const samples = [];
+  for (let offset = 0; ; offset += INTENSITY_PAGE) {
+    const page = await api(`/api/apple_heart_rate?gte.day=${from}&sort=day&order=asc&limit=${INTENSITY_PAGE}&offset=${offset}`);
+    for (const doc of page.items) {
+      for (const [time, [bpm]] of Object.entries(doc.data.samples ?? {})) samples.push([Date.parse(time), bpm]);
+    }
+    if (offset + INTENSITY_PAGE >= page.total) break;
+  }
+  samples.sort((a, b) => a[0] - b[0]);
+  const hrMax = trainingBase().hrMax;
+  const limits = [hrMax * ZONES.easy[1], hrMax * ZONES.hard[0]];
+  const rows = [];
+  for (const sport of INTENSITY_SPORTS) {
+    for (const a of state.activities.filter((x) => PLAN_SPORTS[sport].types.includes(x.sport_type) && x.start_date_local.slice(0, 10) >= from)) {
+      const start = Date.parse(a.start_date), end = start + a.elapsed_time * 1000;
+      const inside = samples.filter(([time]) => time >= start && time <= end);
+      const seconds = [0, 0, 0];
+      let weighted = 0;
+      inside.slice(1).forEach(([time, bpm], i) => {
+        const gap = Math.min((time - inside[i][0]) / 1000, MAX_SAMPLE_GAP);
+        seconds[bpm < limits[0] ? 0 : bpm < limits[1] ? 1 : 2] += gap;
+        weighted += bpm * gap;
+      });
+      const total = seconds[0] + seconds[1] + seconds[2];
+      if (total < a.moving_time * MIN_HR_COVERAGE) continue;
+      rows.push({ id: a.id, sport, name: a.name, day: a.start_date_local.slice(0, 10), seconds, total, hr: weighted / total, stravaHr: a.average_heartrate ?? null, distance: a.distance });
+    }
+  }
+  const skipped = state.activities.filter((x) => INTENSITY_SPORTS.some((k) => PLAN_SPORTS[k].types.includes(x.sport_type)) && x.start_date_local.slice(0, 10) >= from).length - rows.length;
+  state.intensity = { rows: rows.sort((a, b) => b.day.localeCompare(a.day)), limits, skipped };
+}
+function zoneBar(seconds, small) {
+  const total = seconds.reduce((a, b) => a + b, 0);
+  return h("div", { class: `zones${small ? " small" : ""}`, role: "img",
+    "aria-label": INTENSITY_ZONES.map((z, i) => `${z.label} ${Math.round((seconds[i] / total) * 100)} %`).join(", ") },
+    ...INTENSITY_ZONES.map((z, i) => (seconds[i] ? Object.assign(h("i"), { style: `flex:${seconds[i]};background:${z.color}` }) : null)));
+}
+function zoneSummary(title, rows) {
+  const seconds = [0, 1, 2].map((i) => rows.reduce((sum, r) => sum + r.seconds[i], 0));
+  const total = seconds[0] + seconds[1] + seconds[2];
+  const card = h("section", { class: "card" }, h("h2", { text: title }));
+  if (!total) { card.append(h("div", { class: "empty", text: "V tomto období bez dát o tepe." })); return card; }
+  const share = (i) => Math.round((seconds[i] / total) * 100);
+  const verdict = share(0) >= 75 ? "Väčšina času je ľahká, to je dobrý základ."
+    : share(1) > share(0) ? "Najviac času je v strednom pásme, ľahké tréningy skús spomaliť."
+    : "Ľahkého času je menej, než sa bežne odporúča, ľahké tréningy skús spomaliť.";
+  card.append(h("p", { class: "note", text: `${plural(rows.length, "aktivita", "aktivity", "aktivít")}, ${num(total / 3600, 1)} h. ${verdict}` }),
+    zoneBar(seconds),
+    h("div", { class: "zone-sums" }, ...INTENSITY_ZONES.map((z, i) => h("span", {}, h("b", { text: `${share(i)} %` }), ` ${z.label.toLowerCase()}`))));
+  return card;
+}
+function intensityView(nav) {
+  if (!state.intensity) {
+    loadIntensity().then(render).catch(() => { state.intensity = { rows: [], limits: [], skipped: 0, failed: true }; render(); });
+    return [nav, h("section", { class: "card" }, h("div", { class: "empty", text: "Počítam čas v pásmach z tepu…" }))];
+  }
+  const { rows, limits, skipped, failed } = state.intensity;
+  if (failed) return [nav, h("section", { class: "card" }, h("div", { class: "empty", text: "Dáta o tepe sa nepodarilo načítať. Skús to znova neskôr." }))];
+  const from = addDays(localDay(new Date()), -7 * state.intensityWeeks);
+  const list = rows.filter((r) => r.day >= from);
+  const filter = h("div", { class: "seg metric", role: "group", "aria-label": "Obdobie" },
+    ...INTENSITY_WEEKS.map(([weeks, label]) => h("button", { "aria-pressed": String(state.intensityWeeks === weeks), text: label, onclick: () => { state.intensityWeeks = weeks; render(); } })));
+  const info = h("p", { class: "hint", text: `Čas v pásmach zo vzoriek tepu počas behu a jazdy. Ľahké pod ${Math.round(limits[0])} bpm, stredné do ${Math.round(limits[1])} bpm, náročné nad tým. Vytrvalostní športovci mávajú okolo 80 % ľahko.` });
+
+  const today = localDay(new Date());
+  const firstWeek = mondayOf(from);
+  const bars = [];
+  for (let monday = firstWeek; monday <= mondayOf(today); monday = addDays(monday, 7)) {
+    const inWeek = list.filter((r) => mondayOf(r.day) === monday);
+    const parts = INTENSITY_ZONES.map((z, i) => ({ color: z.color, label: z.label, value: inWeek.reduce((sum, r) => sum + r.seconds[i], 0) / 3600 }));
+    bars.push({ tick: shortDate(monday), title: `Týždeň od ${shortDate(monday)}`, parts, total: parts.reduce((sum, p) => sum + p.value, 0) });
+  }
+  const weekly = trendCard("Hodiny za týždeň", "Beh a bicykel spolu", bars.filter((b) => b.total), {
+    legend: legend(INTENSITY_ZONES.map((z) => ({ color: z.color, label: z.label }))),
+    draw: (el) => barChart(el, { bars, label: "Hodiny v pásmach za týždeň" }),
+    table: () => table([{ label: "Týždeň" }, ...INTENSITY_ZONES.map((z) => ({ label: `${z.label} (h)`, num: true }))],
+      bars.filter((b) => b.total).reverse().map((b) => [b.title, ...b.parts.map((p) => num(p.value, 1))])),
+  });
+  const activities = h("section", { class: "card" }, h("h2", { text: "Aktivity" }));
+  for (const r of list.slice(0, 15)) {
+    const share = Math.round((r.seconds[0] / r.total) * 100);
+    activities.append(h("a", { class: "record", href: `#/kalendar/${r.day}` },
+      h("div", { class: "main" }, h("div", { class: "title", text: `${PLAN_SPORTS[r.sport].mark} ${r.name}` }),
+        h("div", { class: "sub", text: `${shortDate(r.day)} · ${num(r.total / 60)} min · ${num(r.hr)} bpm · ${share} % ľahko` }), zoneBar(r.seconds, true))));
+  }
+  if (!list.length) activities.append(h("div", { class: "empty", text: "V tomto období žiadna aktivita." }));
+  const note = skipped ? h("p", { class: "hint", text: `${plural(skipped, "aktivita nemá", "aktivity nemajú", "aktivít nemá")} dosť vzoriek tepu z hodiniek, nie ${skipped === 1 ? "je započítaná" : "sú započítané"}.` }) : null;
+  return [nav, filter, info, h("div", { class: "grid3" }, zoneSummary("Spolu", list), zoneSummary("Beh", list.filter((r) => r.sport === "beh")), zoneSummary("Bicykel", list.filter((r) => r.sport === "bicykel"))),
+    weekly, activities, note].filter(Boolean);
+}
 function swimCard(swim) {
   const card = h("section", { class: "card" }, h("h2", { text: `Série, ${fullDate(swim.day)}` }),
     h("p", { class: "note", text: swim.reliable ? "Série a pauzy rozpoznané z kôl Apple Watch." : "Starší formát záznamu, tempo aj série sú len odhad." }),
@@ -1597,12 +1707,14 @@ function compareText(now, before, text, lowerIsBetter) {
   return `${diff > 0 ? "+" : "−"}${text(Math.abs(diff))}${lowerIsBetter ? (diff < 0 ? " (lepšie)" : " (horšie)") : ""}`;
 }
 function sportView() {
-  const key = SPORTS[route().kind] ? route().kind : "beh";
+  const key = SPORTS[route().kind] || route().kind === "intensita" ? route().kind : "beh";
   const sport = SPORTS[key];
   const today = localDay(new Date());
-  const all = sportActivities(sport);
+  const all = sport ? sportActivities(sport) : [];
   const nav = h("div", { class: "seg subnav", role: "group", "aria-label": "Šport" },
-    ...Object.entries(SPORTS).map(([id, item]) => h("a", { href: `#/vytrvalost/${id}`, "aria-current": String(id === key), text: item.label })));
+    ...Object.entries(SPORTS).map(([id, item]) => h("a", { href: `#/vytrvalost/${id}`, "aria-current": String(id === key), text: item.label })),
+    h("a", { href: "#/vytrvalost/intensita", "aria-current": String(key === "intensita"), text: "Intenzita" }));
+  if (key === "intensita") return intensityView(nav);
   const filter = h("div", { class: "seg metric", role: "group", "aria-label": "Obdobie" },
     ...SPORT_RANGES.map(([days, label]) => h("button", { "aria-pressed": String(state.sportRange === days), text: label, onclick: () => { state.sportRange = days; render(); } })));
   if (!all.length) return [nav, h("section", { class: "card" }, h("div", { class: "empty", text: "Zatiaľ žiadna aktivita." }))];
