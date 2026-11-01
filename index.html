@@ -95,6 +95,17 @@ td.name { white-space: normal; min-width: 140px; }
 .region { margin-top: 12px; }
 .region-head { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; margin-bottom: 4px; }
 .region-head span:last-child { color: var(--ink-2); }
+.workout { border-top: 1px solid var(--grid); padding: 8px 0; margin: 0; }
+.workout:first-of-type { border-top: 0; }
+.workout summary { color: var(--ink); font-size: 14px; }
+.workout summary small { display: block; margin-left: 16px; color: var(--ink-2); font-size: 12.5px; }
+.exercise { padding: 8px 0 0 16px; }
+.exercise .name { font-weight: 600; font-size: 13.5px; }
+.exercise .tag { color: var(--ink-2); font-size: 12px; margin-top: 6px; padding-left: 16px; }
+.sets { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.sets span { background: var(--wash); border-radius: 5px; padding: 1px 7px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.pick { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 8px; }
+select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; min-height: 36px; padding: 0 8px; max-width: 100%; }
 .meter { height: 8px; border-radius: 4px; background: var(--wash); overflow: hidden; }
 .meter i { display: block; height: 100%; border-radius: 4px; background: var(--hrv); }
 .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 2px; }
@@ -143,11 +154,12 @@ const REGIONS = [
   { id: "upper", label: "Horná časť", hours: 48, words: /\b(upper|chest|back|shoulders?|arms?|lats|biceps?|triceps?|push|pull|forearms?)\b/i },
   { id: "lower", label: "Spodná časť", hours: 72, words: /\b(lower|legs?|glutes?|posterior)\b/i },
 ];
+const TYPICAL_SETS = 24;
 const LEG_CARDIO_COST = 0.5;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [] };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], exercise: null };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -222,15 +234,17 @@ async function loadDay() {
 async function loadReadiness() {
   const from = addDays(localDay(new Date()), -READINESS_HISTORY);
   const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
-  const [hrv, resting, strava] = await Promise.all([
+  const [hrv, resting, strava, workouts] = await Promise.all([
     items(`/api/apple_heart_rate_variability?gte.day=${from}&sort=day&order=asc&limit=1000`),
     items(`/api/apple_resting_heart_rate?gte.day=${from}&sort=day&order=asc&limit=1000`),
     items(`/api/strava_activities?gte.start_date_local=${from}&sort=start_date&order=asc&limit=1000&omit=map`),
+    api("/api/strava_strength?sort=start_date&order=desc&limit=1000").then((r) => r.items.map(parseWorkout)),
   ]);
+  state.workouts = workouts;
   const signals = bodySignals(hrv, resting, strava);
   state.readiness = readinessSeries(from, signals, strava);
   state.recovery = recoverySeries(signals);
-  state.strength = strengthStatus(strava);
+  state.strength = strengthStatus(strava, new Map(workouts.map((w) => [w.id, w.sets])));
 }
 
 const clamp = (v) => Math.max(0, Math.min(100, v));
@@ -310,12 +324,50 @@ function recoverySeries(signals) {
   return series;
 }
 
+// Motra writes the whole workout into the Strava description.
+function parseWorkout(doc) {
+  const { name, start_date_local: start, description } = doc.data;
+  const workout = {
+    id: doc.id, day: start.slice(0, 10),
+    title: name.replace(/^Motra - /, "").replace(/^\w+ (Morning|Afternoon|Evening|Night) /, ""),
+    volume: 0, sets: 0, exercises: [],
+  };
+  const volume = /^TVL:\s*([\d.]+)(K?)/.exec(description.trim().split(/\r?\n/).find((l) => l.startsWith("TVL:")) ?? "");
+  if (volume) workout.volume = Number(volume[1]) * (volume[2] ? 1000 : 1);
+  let current = null, superset = false;
+  for (const raw of description.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || /^(Tracked with|TVL:|Duration:|Calories:|Exercises:)/.test(line)) {
+      if (!line) superset = false;
+      continue;
+    }
+    if (line === "Superset") { superset = true; continue; }
+    const set = /^Set \d+:\s*(.*)$/.exec(line);
+    if (!set) {
+      current = { name: line, superset, sets: [] };
+      workout.exercises.push(current);
+    } else if (current) {
+      const parsed = /^(\d+) reps x (?:([\d.]+) kg|BW)( per side)?/.exec(set[1]);
+      current.sets.push(parsed
+        ? { reps: +parsed[1], kg: parsed[2] ? +parsed[2] : null, perSide: !!parsed[3] }
+        : { text: set[1] });
+      workout.sets++;
+    }
+  }
+  return workout;
+}
+function setLabel(set) {
+  if (set.text) return set.text;
+  const load = set.kg == null ? "vlastná váha" : `${num(set.kg, set.kg % 1 ? 1 : 0)} kg`;
+  return `${set.reps} × ${load}${set.perSide ? " / strana" : ""}`;
+}
+
 function regionsOf(activity) {
   const hit = REGIONS.filter((r) => r.words.test(activity.name));
   return /full body/i.test(activity.name) || !hit.length ? REGIONS : hit;
 }
 
-function strengthStatus(strava, now = Date.now()) {
+function strengthStatus(strava, setsById = new Map(), now = Date.now()) {
   const week = now - 7 * 864e5;
   return REGIONS.map((region) => {
     let remaining = 0, sessions = 0;
@@ -325,7 +377,8 @@ function strengthStatus(strava, now = Date.now()) {
       const legCardio = region.id === "lower" && (["Run", "TrailRun", "Hike"].includes(a.sport_type) || (a.sport_type === "Ride" && a.suffer_score >= HARD_RIDE_SCORE));
       if (!lifting && !legCardio) continue;
       if (lifting && end >= week) sessions++;
-      const cost = lifting ? Math.max(0.75, Math.min(1.5, duration(a) / 3600)) : LEG_CARDIO_COST;
+      const sets = setsById.get(String(a.id));
+      const cost = lifting ? Math.max(0.75, Math.min(1.5, sets ? sets / TYPICAL_SETS : duration(a) / 3600)) : LEG_CARDIO_COST;
       remaining = Math.max(remaining, region.hours * cost - (now - end) / 36e5);
     }
     return { ...region, sessions, remaining, score: Math.round(clamp(100 * (1 - remaining / region.hours))) };
@@ -530,7 +583,7 @@ function strengthCard() {
     : ["critical", "×", "Daj voľno alebo techniku"];
   const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("div", {},
     h("h2", { text: "Silový tréning" }),
-    h("p", { class: "note", text: "Podľa času od zaťaženia partie, názvu tréningu a dĺžky" }))));
+    h("p", { class: "note", text: "Podľa času od zaťaženia partie a počtu sérií" }))));
   card.append(h("div", { class: "readiness" },
     h("div", { class: "score", text: String(best.score) }),
     h("div", {}, statusBadge(verdict),
@@ -542,6 +595,61 @@ function strengthCard() {
       h("div", { class: "meter", role: "img", "aria-label": `${region.label}: ${region.score} percent` },
         Object.assign(h("i"), { style: `width:${region.score}%` }))));
   }
+  return card;
+}
+function workoutsLogCard() {
+  const { from } = periods();
+  const list = state.workouts.filter((w) => w.day >= from);
+  const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("div", {},
+    h("h2", { text: "Silové tréningy" }),
+    h("p", { class: "note", text: "Cviky, série a váhy z Motry" }))));
+  if (!list.length) { card.append(h("div", { class: "empty", text: "V tomto období nie sú silové tréningy." })); return card; }
+  list.forEach((w, i) => {
+    const facts = [shortDate(w.day), `${w.exercises.length} cvikov`, `${w.sets} sérií`, `${num(w.volume / 1000, 1)} t`].join(" · ");
+    card.append(h("details", { class: "workout", ...(i === 0 ? { open: "" } : {}) },
+      h("summary", {}, w.title, h("small", { text: facts })),
+      ...w.exercises.map((e) => h("div", { class: "exercise" },
+        h("div", { class: "name", text: e.superset ? `${e.name} (superset)` : e.name }),
+        h("div", { class: "sets" }, ...e.sets.map((set) => h("span", { text: setLabel(set) })))))));
+  });
+  return card;
+}
+function exerciseHistory(name) {
+  return state.workouts.flatMap((w) => {
+    const sets = w.exercises.filter((e) => e.name === name).flatMap((e) => e.sets).filter((set) => set.kg);
+    if (!sets.length) return [];
+    const top = sets.reduce((a, b) => (b.kg > a.kg || (b.kg === a.kg && b.reps > a.reps) ? b : a));
+    return [{ day: w.day, top, count: sets.length }];
+  }).reverse();
+}
+function progressCard() {
+  const counts = new Map();
+  for (const w of state.workouts) for (const e of w.exercises) if (e.sets.some((set) => set.kg)) counts.set(e.name, (counts.get(e.name) ?? 0) + 1);
+  const names = [...counts].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name);
+  const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("div", {},
+    h("h2", { text: "Vývoj cviku" }),
+    h("p", { class: "note", text: "Najvyššia váha v tréningu" }))));
+  if (!names.length) { card.append(h("div", { class: "empty", text: "Zatiaľ nie je dosť tréningov." })); return card; }
+  if (!names.includes(state.exercise)) state.exercise = names[0];
+  const body = h("div", {});
+  const draw = () => {
+    const list = exerciseHistory(state.exercise);
+    const start = list[0].day, end = list[list.length - 1].day;
+    const chart = h("div", { class: "chart" });
+    body.replaceChildren(chart, table([{ label: "Deň" }, { label: "Najvyššia váha" }, { label: "Série", num: true }],
+      list.slice().reverse().map((d) => [fullDate(d.day), setLabel(d.top), String(d.count)])));
+    chart.draw = () => lineChart(chart, {
+      height: 200, x: list.map((d) => daysBetween(start, d.day)), xMin: 0, xMax: daysBetween(start, end), xTicks: dateAxis(start, end),
+      series: [{ color: "var(--hrv)", values: list.map((d) => d.top.kg) }, { color: "var(--hrv)", values: list.map((d) => d.top.kg), dots: true }],
+      label: `Vývoj váhy: ${state.exercise}`,
+      read: (i) => ({ title: fullDate(list[i].day), rows: [{ color: "var(--hrv)", value: setLabel(list[i].top), label: "" }] }),
+    });
+    chart.draw();
+  };
+  const select = h("select", { "aria-label": "Cvik", onchange: (event) => { state.exercise = event.target.value; draw(); } },
+    ...names.map((name) => { const o = h("option", { value: name, text: `${name} (${counts.get(name)}×)` }); o.selected = name === state.exercise; return o; }));
+  card.append(h("div", { class: "pick" }, select), body);
+  card.drawProgress = draw;
   return card;
 }
 function recoveryCard() {
@@ -796,11 +904,13 @@ function filters() {
       state.day < today ? h("button", { "aria-label": "Nasledujúci deň", text: "›", onclick: () => selectDay(addDays(state.day, 1)) }) : null));
 }
 function render() {
-  const cards = [h("div", { class: "grid2" }, strengthCard(), recoveryCard()), readinessCard(), dayCard(), h("div", { class: "grid2" }, hrvCard(), lowHrCard()), loadCard(), workoutsCard()];
+  const progress = progressCard();
+  const cards = [h("div", { class: "grid2" }, strengthCard(), recoveryCard()), workoutsLogCard(), progress, readinessCard(), dayCard(), h("div", { class: "grid2" }, hrvCard(), lowHrCard()), loadCard(), workoutsCard()];
   app.replaceChildren(
     h("header", {}, h("h1", { text: "Zdravie" }), h("button", { class: "link", text: "Odhlásiť", onclick: logout })),
-    filters(), cards[0], cards[1], tiles(), ...cards.slice(2));
+    filters(), ...cards.slice(0, 3), cards[3], tiles(), ...cards.slice(4));
   drawCharts();
+  progress.drawProgress?.();
 }
 function showError() {
   app.classList.remove("loading");
