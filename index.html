@@ -104,8 +104,6 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .seg a[aria-current=true] { background: var(--ink); color: var(--surface); }
 .sila { display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); gap: 12px; align-items: start; }
 .sila .list { position: sticky; top: 10px; padding: 10px; }
-.sila .list .seg { margin-bottom: 8px; }
-.sila .list .seg a { flex: 1; justify-content: center; }
 .sila .list input { width: 100%; margin-bottom: 8px; }
 .rows { max-height: calc(100vh - 150px); overflow-y: auto; }
 .row { display: flex; gap: 10px; align-items: center; padding: 9px 8px; border-radius: 7px; color: inherit; text-decoration: none; }
@@ -131,6 +129,15 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .badge { border: 1px solid var(--hrv); border-radius: 5px; padding: 0 5px; font-size: 11.5px; color: var(--ink); }
 .sets { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .sets span { background: var(--wash); border-radius: 5px; padding: 1px 7px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.subnav { margin-bottom: 12px; }
+.plan-line { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
+.plan-line b { color: var(--ink); font-size: 14px; font-weight: 640; }
+.muscle { display: grid; grid-template-columns: 76px minmax(0, 1fr) 112px; gap: 10px; align-items: center; margin-top: 9px; font-size: 13px; }
+.muscle .value { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.muscle .value b { color: var(--ink); font-weight: 620; }
+.track { position: relative; height: 8px; border-radius: 4px; background: var(--wash); }
+.track i { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--hrv); }
+.track u { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); }
 .more { display: block; margin-top: 12px; color: var(--ink-2); text-decoration: none; font-size: 13px; }
 .more:hover { color: var(--ink); }
 .metric { margin: 12px 0 8px; }
@@ -138,7 +145,7 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
   .sila { grid-template-columns: minmax(0, 1fr); }
   .sila .list { position: static; }
   .rows { max-height: none; }
-  .sila[data-detail=true] .list, .sila[data-detail=true] ~ *, .sila-top[data-detail=true] { display: none; }
+  .sila[data-detail=true] .list { display: none; }
   .sila[data-detail=false] .detail { display: none; }
   .back { display: inline-block; }
 }
@@ -192,6 +199,19 @@ const REGIONS = [
 ];
 const TYPICAL_SETS = 24;
 const LEG_CARDIO_COST = 0.5;
+// Checked in order: leg curls are legs, not biceps, and a rear delt fly is shoulders, not chest.
+const MUSCLES = [
+  ["Brucho", /crunch|russian twist|ab coaster/i],
+  ["Nohy", /leg|squat|lunge|calf|hamstring|glute/i],
+  ["Triceps", /tricep|dips/i],
+  ["Biceps", /bicep|curl/i],
+  ["Ramená", /shoulder press|lateral raise|front raise|rear delt/i],
+  ["Chrbát", /pull.?down|pull-up|row\b|pullover|back extension/i],
+  ["Hrudník", /bench press|chest press|fly|pec dec/i],
+];
+const WORKING_SET_SHARE = 0.9;
+const WARMUP_SHARE = 0.6;
+const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
@@ -611,10 +631,109 @@ function table(columns, rows) {
 function statusBadge([tone, icon, verdict]) {
   return h("div", { class: `status ${tone}` }, Object.assign(h("i", { text: icon }), { style: `background:var(--${tone})` }), verdict);
 }
+function bestRegion() {
+  return state.strength.reduce((a, b) => (b.score > a.score || (b.score === a.score && b.sessions < a.sessions) ? b : a));
+}
+function recoveryIsLow() {
+  return state.recovery.at(-1)?.day === localDay(new Date()) && state.recovery.at(-1).score < 34;
+}
+function muscleOf(name) {
+  return MUSCLES.find(([, words]) => words.test(name))?.[0] ?? null;
+}
+function repCeiling(name) {
+  if (muscleOf(name) === "Brucho") return CORE_REPS;
+  return /curl|raise|fly|pec dec|extension|pushdown|calf/i.test(name) ? ISOLATION_REPS : COMPOUND_REPS;
+}
+// The most common jump this exercise has seen, so the target is a weight the gym really has.
+function weightStep(entry) {
+  const minimum = /dumbbell/i.test(entry.name) ? 2 : /barbell|smith|plate/i.test(entry.name) ? 2.5 : 5;
+  const weights = [...new Set(entry.sessions.flatMap((p) => p.sets.map((set) => set.kg)).filter(Boolean))].sort((x, y) => x - y);
+  const seen = new Map();
+  weights.slice(1).forEach((kg, i) => {
+    const gap = kg - weights[i];
+    if (gap >= minimum && gap <= minimum * 2) seen.set(gap, (seen.get(gap) ?? 0) + 1);
+  });
+  return [...seen].sort((x, y) => y[1] - x[1] || x[0] - y[0])[0]?.[0] ?? minimum;
+}
+// The agreed rule: all working sets at the top of the rep range earn a heavier weight,
+// otherwise the weight stays and the weakest set gets one more rep.
+function exerciseTarget(entry, hold) {
+  const last = entry.sessions[entry.sessions.length - 1];
+  const counted = last.sets.filter((set) => set.reps != null);
+  if (!counted.length) return null;
+  const working = last.top ? counted.filter((set) => set.kg >= last.top.kg * WORKING_SET_SHARE) : counted;
+  const ceiling = repCeiling(entry.name);
+  const lowest = Math.min(...working.map((set) => set.reps));
+  const previous = `${working.map((set) => set.reps).join("/")}${last.top ? ` × ${kgText(last.top.kg)}` : ""}`;
+  const side = last.top?.perSide ? " / strana" : "";
+  if (!last.top) return { previous, next: `${working.length} × ${hold ? lowest : lowest + 1} opak.`, increase: 0 };
+  if (lowest >= ceiling && !hold) {
+    const step = weightStep(entry);
+    return { previous, next: `${working.length} × ${ceiling - 2} × ${kgText(last.top.kg + step)}${side}`, increase: step };
+  }
+  return { previous, next: `${working.length} × ${hold ? lowest : Math.min(lowest + 1, ceiling)} × ${kgText(last.top.kg)}${side}`, increase: 0 };
+}
+function planCard(index) {
+  const best = bestRegion();
+  const trainedToday = state.workouts[0]?.day === localDay(new Date());
+  const hold = recoveryIsLow() || best.score < 90 || trainedToday;
+  const template = state.workouts.find((w) => w.region === best.label) ?? state.workouts.find((w) => w.region === "Celé telo") ?? state.workouts[0];
+  const title = trainedToday ? `Ďalší tréning: ${best.label}` : best.score >= 90 ? `Plán na dnes: ${best.label}`
+    : best.score >= 60 ? `Ľahší tréning: ${best.label}` : `Po oddychu: ${best.label}`;
+  const note = hold ? "Váhy držíme, dnes sa netlačí na progres." : "Keď dáš všetky série naplno, ďalšie zvýšenie príde samo.";
+  const card = h("section", { class: "card" }, h("h2", { text: title }),
+    h("p", { class: "note", text: `${note} Podľa tréningu z ${shortDate(template.day)}` }));
+  let inSuperset = false;
+  for (const e of template.exercises) {
+    const entry = index.get(e.name);
+    const target = exerciseTarget(entry, hold);
+    if (!target) continue;
+    if (e.superset && !inSuperset) card.append(h("div", { class: "ex-tag", text: "Superset" }));
+    inSuperset = e.superset;
+    card.append(h("a", { class: "ex", href: exerciseHref(e.name) },
+      h("div", { class: "ex-head" }, h("span", { class: "name", text: e.name }),
+        h("span", { class: "right" },
+          target.increase ? h("span", { class: "badge", text: `${signed(target.increase)}` }) : null,
+          h("span", { class: "chev", text: "›", "aria-hidden": "true" }))),
+      h("div", { class: "plan-line" }, "Cieľ ", h("b", { text: target.next })),
+      h("div", { class: "plan-line", text: `Minule ${target.previous}` })));
+  }
+  return card;
+}
+// Warm-ups do not count as training volume.
+function muscleSets() {
+  const today = localDay(new Date());
+  const counts = new Map(MUSCLES.map(([name]) => [name, { week: 0, month: 0 }]));
+  for (const workout of state.workouts) {
+    const age = daysBetween(workout.day, today);
+    if (age >= 35) continue;
+    for (const e of workout.exercises) {
+      const muscle = counts.get(muscleOf(e.name));
+      if (!muscle) continue;
+      const top = Math.max(0, ...e.sets.map((set) => set.kg ?? 0));
+      const sets = e.sets.filter((set) => set.reps != null && (set.kg ?? top) >= top * WARMUP_SHARE).length;
+      if (age < 7) muscle.week += sets; else muscle.month += sets;
+    }
+  }
+  return [...counts].map(([name, c]) => ({ name, week: c.week, average: c.month / 4 }));
+}
+function muscleCard() {
+  const rows = muscleSets();
+  const scale = Math.max(20, ...rows.flatMap((r) => [r.week, r.average]));
+  return h("section", { class: "card" },
+    h("h2", { text: "Série podľa partie" }),
+    h("p", { class: "note", text: "Posledných 7 dní, značka je tvoj priemer za 4 týždne pred tým. Orientačne 10–20 sérií týždenne." }),
+    ...rows.map((r) => h("div", { class: "muscle" },
+      h("span", { text: r.name }),
+      h("div", { class: "track", role: "img", "aria-label": `${r.name}: ${r.week} sérií, priemer ${num(r.average, 1)}` },
+        Object.assign(h("i"), { style: `width:${(r.week / scale) * 100}%` }),
+        Object.assign(h("u"), { style: `left:${(r.average / scale) * 100}%` })),
+      h("span", { class: "value" }, h("b", { text: String(r.week) }), ` / priem. ${num(r.average, 1)}`))));
+}
 function strengthCard(withLink = true) {
   const regions = state.strength;
-  const best = regions.reduce((a, b) => (b.score > a.score || (b.score === a.score && b.sessions < a.sessions) ? b : a));
-  const lowRecovery = state.recovery.at(-1)?.day === localDay(new Date()) && state.recovery.at(-1).score < 34;
+  const best = bestRegion();
+  const lowRecovery = recoveryIsLow();
   const verdict = best.score >= 90 ? ["good", "✓", `Dnes: ${best.label}`]
     : best.score >= 60 ? ["warning", "!", `Ľahšie: ${best.label}`]
     : ["critical", "×", "Daj voľno alebo techniku"];
@@ -689,7 +808,7 @@ function backLink(href, label) {
   return h("a", { class: "back", href, text: `‹ ${label}` });
 }
 function workoutPane(workout, index) {
-  const pane = h("section", { class: "card detail" }, backLink("#/sila", "Tréningy"),
+  const pane = h("section", { class: "card detail" }, backLink("#/sila/treningy", "Tréningy"),
     h("h2", { text: workout.region }),
     h("p", { class: "note", text: `${fullDate(workout.day)} · ${workout.title}` }),
     h("div", { class: "facts" }, fact("Objem", num(workout.volume / 1000, 1), "t"), fact("Série", String(workout.sets)),
@@ -768,6 +887,11 @@ function exercisePane(entry) {
   }
   return pane;
 }
+function strengthNav(active) {
+  const link = (href, id, label) => h("a", { href, "aria-current": String(active === id), text: label });
+  return h("div", { class: "seg subnav", role: "group", "aria-label": "Sekcie" },
+    link("#/sila", "dnes", "Dnes"), link("#/sila/treningy", "treningy", "Tréningy"), link("#/sila/cviky", "cviky", "Cviky"));
+}
 function strengthView() {
   const { kind, id } = route();
   if (!state.workouts.length) return [h("section", { class: "card" }, h("div", { class: "empty", text: "Zatiaľ nie sú silové tréningy." }))];
@@ -776,6 +900,7 @@ function strengthView() {
   const entry = kind === "cvik" ? index.get(id) : null;
   const showExercises = kind === "cviky" || !!entry;
   const hasDetail = !!(workout || entry);
+  if (!kind) return [strengthNav("dnes"), h("div", { class: "grid2" }, strengthCard(false), muscleCard()), planCard(index)];
 
   const list = h("div", { class: "rows" });
   if (showExercises) {
@@ -790,16 +915,9 @@ function strengthView() {
       const term = state.search.toLowerCase();
       list.querySelectorAll(".row").forEach((row) => { row.hidden = !row.dataset.name.includes(term); });
     } }) : null;
-  const aside = h("aside", { class: "card list" },
-    h("div", { class: "seg", role: "group", "aria-label": "Zoznam" },
-      h("a", { href: "#/sila", "aria-current": String(!showExercises), text: "Tréningy" }),
-      h("a", { href: "#/sila/cviky", "aria-current": String(showExercises), text: "Cviky" })),
-    search, list);
+  const aside = h("aside", { class: "card list" }, search, list);
   const detail = entry ? exercisePane(entry) : workoutPane(workout ?? state.workouts[0], index);
-  return [
-    h("div", { class: "sila-top", "data-detail": String(hasDetail) }, strengthCard(false)),
-    h("div", { class: "sila", "data-detail": String(hasDetail) }, aside, detail),
-  ];
+  return [strengthNav(showExercises ? "cviky" : "treningy"), h("div", { class: "sila", "data-detail": String(hasDetail) }, aside, detail)];
 }
 function recoveryCard() {
   const list = state.recovery;
