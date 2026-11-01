@@ -138,6 +138,25 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .track { position: relative; height: 8px; border-radius: 4px; background: var(--wash); }
 .track i { position: absolute; inset: 0 auto 0 0; border-radius: 4px; background: var(--hrv); }
 .track u { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; margin-bottom: 12px; align-items: start; }
+.grid3 .card { margin-bottom: 0; }
+.grid3 + .card { margin-top: 12px; }
+.trend { display: flex; gap: 10px; align-items: center; padding: 9px 8px; margin: 0 -8px; border-top: 1px solid var(--grid); border-radius: 7px; color: inherit; text-decoration: none; }
+.trend:hover { background: var(--wash); }
+.trend .main { min-width: 0; flex: 1; }
+.trend .title { font-weight: 600; font-size: 13.5px; }
+.trend .sub { color: var(--ink-2); font-size: 12.5px; }
+.trend .pct { font-weight: 620; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.trend svg { flex: none; width: 56px; height: 24px; }
+.cal { display: grid; grid-template-columns: 52px repeat(7, minmax(0, 1fr)) 34px; gap: 3px; align-items: center; margin-top: 10px; }
+.cal .head { color: var(--ink-2); font-size: 12px; text-align: center; }
+.cal .week { color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cal .count { color: var(--ink-2); font-size: 12.5px; text-align: right; font-variant-numeric: tabular-nums; }
+.day { position: relative; display: flex; align-items: center; justify-content: center; height: 28px; border-radius: 5px; background: var(--wash); color: #fff; font-size: 12px; font-weight: 650; text-decoration: none; }
+.day.today { box-shadow: 0 0 0 2px var(--ink); }
+.day.future { background: none; }
+.day.other { color: var(--ink); background: var(--axis); }
+.day b { position: absolute; right: 3px; top: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--surface); }
 .more { display: block; margin-top: 12px; color: var(--ink-2); text-decoration: none; font-size: 13px; }
 .more:hover { color: var(--ink); }
 .metric { margin: 12px 0 8px; }
@@ -209,13 +228,24 @@ const MUSCLES = [
   ["Chrbát", /pull.?down|pull-up|row\b|pullover|back extension/i],
   ["Hrudník", /bench press|chest press|fly|pec dec/i],
 ];
+const TREND_DAYS = 28;
+const TREND_THRESHOLD = 2.5;
+// A month cannot change strength this much, it means another machine or a logging mistake.
+const SUSPICIOUS_CHANGE = 30;
+const CALENDAR_WEEKS = 18;
+const STEADY_WEEK = 2;
+const WORKOUT_KINDS = {
+  "Horná časť": ["H", "var(--hrv)"],
+  "Spodná časť": ["S", "var(--run)"],
+  "Celé telo": ["C", "var(--strength)"],
+};
 const WORKING_SET_SHARE = 0.9;
 const WARMUP_SHARE = 0.6;
 const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -297,6 +327,7 @@ async function loadReadiness() {
     api("/api/strava_strength?sort=start_date&order=desc&limit=1000").then((r) => r.items.map(parseWorkout)),
   ]);
   state.workouts = workouts;
+  state.activities = strava;
   const signals = bodySignals(hrv, resting, strava);
   state.readiness = readinessSeries(from, signals, strava);
   state.recovery = recoverySeries(signals);
@@ -887,10 +918,134 @@ function exercisePane(entry) {
   }
   return pane;
 }
+const plural = (n, one, few, many) => `${n} ${n === 1 ? one : n >= 2 && n <= 4 ? few : many}`;
+
+// Estimated max rather than raw weight: changing reps moves the weight without changing strength.
+function exerciseTrends(index) {
+  const today = localDay(new Date());
+  const rows = [];
+  let skipped = 0;
+  for (const entry of index.values()) {
+    const sessions = entry.sessions.filter((p) => p.top);
+    if (!sessions.length) continue;
+    const age = (p) => daysBetween(p.workout.day, today);
+    const recent = sessions.filter((p) => age(p) < TREND_DAYS);
+    const before = sessions.filter((p) => age(p) >= TREND_DAYS && age(p) < TREND_DAYS * 2);
+    if (!recent.length || !before.length) {
+      if (recent.length) skipped++;
+      continue;
+    }
+    const now = Math.max(...recent.map((p) => p.orm)), was = Math.max(...before.map((p) => p.orm));
+    const best = sessions.reduce((a, b) => (b.orm >= a.orm ? b : a));
+    rows.push({
+      name: entry.name, now, was, change: ((now - was) / was) * 100,
+      weeksFlat: Math.floor(age(best) / 7),
+      points: [...before, ...recent].map((p) => p.orm),
+    });
+  }
+  return { rows, skipped };
+}
+function sparkline(points) {
+  const lo = Math.min(...points), hi = Math.max(...points), w = 56, h = 24, pad = 3;
+  const x = (i) => pad + (i / Math.max(points.length - 1, 1)) * (w - pad * 2);
+  const y = (v) => h - pad - ((v - lo) / (hi - lo || 1)) * (h - pad * 2);
+  return s("svg", { viewBox: `0 0 ${w} ${h}`, "aria-hidden": "true" },
+    s("polyline", { points: points.map((v, i) => `${x(i)},${y(v)}`).join(" "), fill: "none", stroke: "var(--hrv)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }),
+    s("circle", { cx: x(points.length - 1), cy: y(points[points.length - 1]), r: 2.5, fill: "var(--hrv)" }));
+}
+function trendGroup(title, note, rows, showFlat) {
+  const card = h("section", { class: "card" }, h("h2", { text: `${title} (${rows.length})` }), h("p", { class: "note", text: note }));
+  if (!rows.length) card.append(h("div", { class: "empty", text: "Žiadny cvik." }));
+  for (const r of rows) {
+    const sign = r.change > 0 ? "+" : r.change < 0 ? "−" : "";
+    card.append(h("a", { class: "trend", href: exerciseHref(r.name) },
+      h("div", { class: "main" }, h("div", { class: "title", text: r.name }),
+        h("div", { class: "sub", text: `${num(r.was)} → ${num(r.now)} kg${showFlat && r.weeksFlat ? ` · bez rekordu ${plural(r.weeksFlat, "týždeň", "týždne", "týždňov")}` : ""}` })),
+      sparkline(r.points),
+      h("div", { class: "pct", text: `${sign}${num(Math.abs(r.change), 1)} %` })));
+  }
+  return card;
+}
+function mondayOf(day) {
+  return addDays(day, -((new Date(`${day}T12:00:00`).getDay() + 6) % 7));
+}
+function calendarStats(lifted) {
+  const today = localDay(new Date());
+  const days = [...lifted.keys()].sort();
+  const perWeek = (monday) => days.filter((d) => mondayOf(d) === monday).length;
+  let week = mondayOf(today), streak = 0;
+  if (perWeek(week) < STEADY_WEEK) week = addDays(week, -7);
+  while (perWeek(week) >= STEADY_WEEK) { streak++; week = addDays(week, -7); }
+  const month = days.filter((d) => daysBetween(d, today) < 28).length;
+  const gaps = days.slice(1).map((d, i) => daysBetween(days[i], d));
+  return { streak, month, longestGap: gaps.length ? Math.max(...gaps) : 0 };
+}
+function calendarCard() {
+  const today = localDay(new Date());
+  const lifted = new Map(), other = new Map();
+  for (const w of state.workouts) if (!lifted.has(w.day)) lifted.set(w.day, w);
+  for (const a of state.activities) {
+    if (a.sport_type === "WeightTraining") continue;
+    const day = a.start_date_local.slice(0, 10);
+    if (!other.has(day)) other.set(day, a);
+  }
+  const stats = calendarStats(lifted);
+  const card = h("section", { class: "card" }, h("h2", { text: "Kalendár" }),
+    h("p", { class: "note", text: `Posledných ${CALENDAR_WEEKS} týždňov. Vpravo počet silových tréningov.` }),
+    h("div", { class: "facts" },
+      fact("Za 4 týždne", String(stats.month), "tréningov"),
+      fact("Priemer", num(stats.month / 4, 1), "za týždeň"),
+      fact(`V rade s ${STEADY_WEEK}+ tréningami`, plural(stats.streak, "týždeň", "týždne", "týždňov")),
+      fact("Najdlhšia pauza", plural(stats.longestGap, "deň", "dni", "dní"))),
+    legend([...Object.entries(WORKOUT_KINDS).map(([label, [, color]]) => ({ color, label })), { color: "var(--axis)", label: "Iný šport" }]));
+  const grid = h("div", { class: "cal" }, h("span"), ...["Po", "Ut", "St", "Št", "Pi", "So", "Ne"].map((d) => h("span", { class: "head", text: d })), h("span"));
+  let monday = addDays(mondayOf(today), -7 * (CALENDAR_WEEKS - 1));
+  for (let w = 0; w < CALENDAR_WEEKS; w++, monday = addDays(monday, 7)) {
+    grid.append(h("span", { class: "week", text: shortDate(monday) }));
+    let count = 0;
+    for (let d = 0; d < 7; d++) {
+      const day = addDays(monday, d);
+      const workout = lifted.get(day), sport = other.get(day);
+      const today_ = day === today ? " today" : "";
+      if (workout) {
+        count++;
+        const [letter, color] = WORKOUT_KINDS[workout.region];
+        const cell = h("a", { class: `day${today_}`, href: workoutHref(workout.id), title: `${shortDate(day)}: ${workout.region}`, "aria-label": `${shortDate(day)}: ${workout.region}`, text: letter, style: `background:${color}` });
+        if (sport) cell.append(h("b", { title: SPORT_NAMES[sport.sport_type] ?? sport.sport_type }));
+        grid.append(cell);
+      } else if (sport) {
+        const label = SPORT_NAMES[sport.sport_type] ?? sport.sport_type;
+        grid.append(h("span", { class: `day other${today_}`, title: `${shortDate(day)}: ${label}: ${sport.name}`, "aria-label": `${shortDate(day)}: ${label}`, text: "•" }));
+      } else {
+        grid.append(h("span", { class: `day${today_}${day > today ? " future" : ""}` }));
+      }
+    }
+    grid.append(h("span", { class: "count", text: count ? String(count) : "" }));
+  }
+  card.append(grid);
+  return card;
+}
+function progressView(index) {
+  const { rows, skipped } = exerciseTrends(index);
+  const odd = rows.filter((r) => Math.abs(r.change) > SUSPICIOUS_CHANGE);
+  const real = rows.filter((r) => !odd.includes(r));
+  const up = real.filter((r) => r.change >= TREND_THRESHOLD).sort((a, b) => b.change - a.change);
+  const down = real.filter((r) => r.change <= -TREND_THRESHOLD).sort((a, b) => a.change - b.change);
+  const flat = real.filter((r) => Math.abs(r.change) < TREND_THRESHOLD).sort((a, b) => b.weeksFlat - a.weeksFlat);
+  return [
+    h("p", { class: "hint", text: `Odhad 1RM za posledné 4 týždne oproti 4 predchádzajúcim. Hodnotím cviky z oboch období, ${plural(skipped, "cvik je", "cviky sú", "cvikov je")} nových alebo zatiaľ bez porovnania.` }),
+    h("div", { class: "grid3" },
+      trendGroup("Rastie", `O ${num(TREND_THRESHOLD, 1)} % a viac`, up),
+      trendGroup("Stojí", `Zmena do ${num(TREND_THRESHOLD, 1)} %`, flat, true),
+      trendGroup("Klesá", `O ${num(TREND_THRESHOLD, 1)} % a viac`, down, true)),
+    odd.length ? trendGroup("Skontroluj", "Príliš veľká zmena, pravdepodobne iný stroj alebo chyba v zápise. Do hodnotenia sa nerátajú.", odd) : null,
+    calendarCard(),
+  ].filter(Boolean);
+}
 function strengthNav(active) {
   const link = (href, id, label) => h("a", { href, "aria-current": String(active === id), text: label });
   return h("div", { class: "seg subnav", role: "group", "aria-label": "Sekcie" },
-    link("#/sila", "dnes", "Dnes"), link("#/sila/treningy", "treningy", "Tréningy"), link("#/sila/cviky", "cviky", "Cviky"));
+    link("#/sila", "dnes", "Dnes"), link("#/sila/progres", "progres", "Progres"), link("#/sila/treningy", "treningy", "Tréningy"), link("#/sila/cviky", "cviky", "Cviky"));
 }
 function strengthView() {
   const { kind, id } = route();
@@ -900,6 +1055,7 @@ function strengthView() {
   const entry = kind === "cvik" ? index.get(id) : null;
   const showExercises = kind === "cviky" || !!entry;
   const hasDetail = !!(workout || entry);
+  if (kind === "progres") return [strengthNav("progres"), ...progressView(index)];
   if (!kind) return [strengthNav("dnes"), h("div", { class: "grid2" }, strengthCard(false), muscleCard()), planCard(index)];
 
   const list = h("div", { class: "rows" });
