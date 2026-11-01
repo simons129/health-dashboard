@@ -12,6 +12,7 @@
   --page: #f9f9f7; --surface: #fcfcfb;
   --ink: #0b0b0b; --ink-2: #52514e; --muted: #6f6e68;
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10); --wash: rgba(11,11,11,.05);
+  --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
   --hr: #e34948; --hrv: #6250d6;
   --ride: #2a78d6; --run: #eb6834; --strength: #1baf7a; --other: #eda100;
 }
@@ -89,6 +90,12 @@ th, td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--grid); white-sp
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 td.name { white-space: normal; min-width: 140px; }
 @media (max-width: 560px) { th.name, td.name { display: none; } }
+.readiness { display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: center; margin-bottom: 8px; }
+.score { font-size: 56px; font-weight: 640; line-height: 1; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 2px; }
+.status i { width: 18px; height: 18px; border-radius: 50%; color: #fff; font: 700 12px/18px system-ui, sans-serif; text-align: center; }
+.status.warning i { color: #0b0b0b; }
+.parts { color: var(--ink-2); font-size: 13px; }
 #tip {
   position: fixed; z-index: 10; pointer-events: none; min-width: 120px; max-width: 240px;
   padding: 7px 10px; border-radius: 8px; font-size: 12.5px;
@@ -123,9 +130,11 @@ const SPORT_NAMES = {
   Ride: "Bicykel", VirtualRide: "Bicykel", Run: "Beh", TrailRun: "Beh", WeightTraining: "Sila",
   Workout: "Tréning", Swim: "Plávanie", Walk: "Chôdza", Hike: "Turistika",
 };
+const READINESS_HISTORY = 130;
+const READINESS_DAYS = 30;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [] };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -196,6 +205,73 @@ async function loadTrend() {
 async function loadDay() {
   const doc = await api(`/api/apple_heart_rate/${state.day}`);
   state.dayDoc = doc ? doc.data : null;
+}
+async function loadReadiness() {
+  const from = addDays(localDay(new Date()), -READINESS_HISTORY);
+  const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
+  const [hrv, resting, strava] = await Promise.all([
+    items(`/api/apple_heart_rate_variability?gte.day=${from}&sort=day&order=asc&limit=1000`),
+    items(`/api/apple_resting_heart_rate?gte.day=${from}&sort=day&order=asc&limit=1000`),
+    items(`/api/strava_activities?gte.start_date_local=${from}&sort=start_date&order=asc&limit=1000&omit=map`),
+  ]);
+  state.readiness = readinessSeries(from, hrv, resting, strava);
+}
+
+// Without overnight data a single day of HRV is noise: on two years of history neither morning
+// nor all-day HRV reacted to the previous day's training. The score therefore leans on training
+// load, and body signals count only as a 7 day trend against the personal baseline.
+function readinessSeries(from, hrv, resting, strava) {
+  const today = localDay(new Date());
+  const clamp = (v) => Math.max(0, Math.min(100, v));
+  const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+  const spread = (values, m) => Math.sqrt(mean(values.map((v) => (v - m) ** 2))) || 1;
+  const trendZ = (series, day) => {
+    const pick = (lo, hi) => {
+      const out = [];
+      for (let i = lo; i <= hi; i++) {
+        const v = series.get(addDays(day, -i));
+        if (v != null) out.push(v);
+      }
+      return out;
+    };
+    const recent = pick(0, 6), base = pick(7, 66);
+    if (recent.length < 3 || base.length < 14) return null;
+    const m = mean(base);
+    return (median(recent) - m) / spread(base, m);
+  };
+
+  const busy = strava.map((a) => {
+    const start = Date.parse(a.start_date);
+    return [start - 18e5, start + a.elapsed_time * 1e3 + 54e5];
+  });
+  const calmHrv = new Map();
+  for (const doc of hrv) {
+    const values = Object.entries(doc.samples ?? {})
+      .filter(([time]) => !busy.some(([a, b]) => Date.parse(time) >= a && Date.parse(time) <= b))
+      .map(([, sample]) => Math.log(sample[0]));
+    if (values.length) calmHrv.set(doc.day, median(values));
+  }
+  const rest = new Map(resting.map((r) => [r.day, r.bpm]));
+  const load = new Map();
+  for (const a of strava) {
+    const day = a.start_date_local.slice(0, 10);
+    load.set(day, (load.get(day) ?? 0) + (a.suffer_score || duration(a) / 60));
+  }
+
+  const series = [];
+  let acute = 0, chronic = 0;
+  for (let day = from; day <= today; day = addDays(day, 1)) {
+    acute += ((load.get(day) ?? 0) - acute) / 7;
+    chronic += ((load.get(day) ?? 0) - chronic) / 42;
+    if (daysBetween(day, today) >= READINESS_DAYS || chronic < 1) continue;
+    const ratio = acute / chronic;
+    const loadScore = clamp(100 - (ratio - 0.6) * 100);
+    const hrvZ = trendZ(calmHrv, day), restZ = trendZ(rest, day);
+    const signals = [hrvZ, restZ == null ? null : -restZ].filter((z) => z != null);
+    const bodyScore = signals.length ? clamp(50 + 25 * mean(signals)) : null;
+    series.push({ day, ratio, loadScore, bodyScore, score: Math.round(bodyScore == null ? loadScore : 0.6 * loadScore + 0.4 * bodyScore) });
+  }
+  return series;
 }
 function periods() {
   const today = localDay(new Date());
@@ -384,6 +460,35 @@ function table(columns, rows) {
 }
 
 /* Views */
+function readinessCard() {
+  const list = state.readiness;
+  const card = h("section", { class: "card" });
+  card.append(h("div", { class: "card-head" }, h("div", {}, h("h2", { text: "Pripravenosť" }),
+    h("p", { class: "note", text: "Odhad bez nočných dát: 60 % tréningová záťaž, 40 % 7-dňový trend. Sleduj vývoj, nie jeden deň." }))));
+  if (!list.length) { card.append(h("div", { class: "empty", text: "Zatiaľ nie je dosť tréningov na výpočet." })); return card; }
+  const now = list[list.length - 1];
+  const [tone, icon, verdict] = now.score >= 67 ? ["good", "✓", "Môžeš pridať"] : now.score >= 34 ? ["warning", "!", "Bežný tréning"] : ["critical", "×", "Uber"];
+  card.append(h("div", { class: "readiness" },
+    h("div", { class: "score", text: String(now.score) }),
+    h("div", {},
+      h("div", { class: `status ${tone}` }, Object.assign(h("i", { text: icon }), { style: `background:var(--${tone})` }), verdict),
+      h("div", { class: "parts", text: `Záťaž 7 dní oproti 6 týždňom: ${num(now.ratio, 2)}× (${num(now.loadScore)}/100)` }),
+      h("div", { class: "parts", text: now.bodyScore == null ? "Trend tela: málo dát" : `Trend tela: ${num(now.bodyScore)}/100` }))));
+  const start = list[0].day;
+  const chart = h("div", { class: "chart" });
+  card.append(chart);
+  chart.draw = () => lineChart(chart, {
+    height: 170, x: list.map((d) => daysBetween(start, d.day)), xMin: 0, xMax: daysBetween(start, now.day), xTicks: dateAxis(start, now.day),
+    series: [{ color: "var(--hrv)", values: list.map((d) => d.score) }],
+    label: "Pripravenosť za posledných 30 dní",
+    read: (i) => ({ title: fullDate(list[i].day), rows: [
+      { color: "var(--hrv)", value: String(list[i].score), label: "pripravenosť" },
+      { value: `${num(list[i].ratio, 2)}×`, label: "záťaž" }] }),
+  });
+  card.append(table([{ label: "Deň" }, { label: "Skóre", num: true }, { label: "Záťaž", num: true }, { label: "Trend tela", num: true }],
+    list.slice().reverse().map((d) => [fullDate(d.day), String(d.score), num(d.loadScore), d.bodyScore == null ? "–" : num(d.bodyScore)])));
+  return card;
+}
 function tiles() {
   const { from, prevFrom } = periods();
   const { hr, hrv, strava } = state.trend;
@@ -408,7 +513,7 @@ function tiles() {
   const seconds = workouts.reduce((total, a) => total + duration(a), 0);
   const secondsPrev = workoutsPrev.reduce((total, a) => total + duration(a), 0);
   return h("div", { class: "tiles" },
-    tile("Priemerné HRV", hrvNow == null ? "–" : num(hrvNow, 1), "ms", change(hrvNow, hrvPrev, 1, " ms"), true),
+    tile("Priemerné HRV", hrvNow == null ? "–" : num(hrvNow, 1), "ms", change(hrvNow, hrvPrev, 1, " ms")),
     tile("Najnižší tep dňa, priemer", lowNow == null ? "–" : num(lowNow), "bpm", change(lowNow, lowPrev, 1, " bpm")),
     tile("Tréningy", String(workouts.length), "", change(workouts.length, workoutsPrev.length, 0, "")),
     tile("Čas tréningov", num(seconds / 3600, 1), "h", change(seconds / 3600, secondsPrev / 3600, 1, " h")),
@@ -579,10 +684,10 @@ function filters() {
       state.day < today ? h("button", { "aria-label": "Nasledujúci deň", text: "›", onclick: () => selectDay(addDays(state.day, 1)) }) : null));
 }
 function render() {
-  const cards = [dayCard(), h("div", { class: "grid2" }, hrvCard(), lowHrCard()), loadCard(), workoutsCard()];
+  const cards = [readinessCard(), dayCard(), h("div", { class: "grid2" }, hrvCard(), lowHrCard()), loadCard(), workoutsCard()];
   app.replaceChildren(
     h("header", {}, h("h1", { text: "Zdravie" }), h("button", { class: "link", text: "Odhlásiť", onclick: logout })),
-    filters(), tiles(), ...cards);
+    filters(), cards[0], tiles(), ...cards.slice(1));
   drawCharts();
 }
 function showError() {
@@ -610,7 +715,7 @@ function selectDay(day) {
   state.day = day;
   refresh(loadDay);
 }
-const start = () => refresh(() => Promise.all([loadTrend(), loadDay()]));
+const start = () => refresh(() => Promise.all([loadTrend(), loadDay(), loadReadiness()]));
 
 function logout() {
   apiKey = "";
