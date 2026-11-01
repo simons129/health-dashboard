@@ -200,6 +200,14 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .zones i { display: block; min-width: 2px; }
 .zone-sums { display: flex; flex-wrap: wrap; gap: 4px 18px; font-size: 13px; color: var(--ink-2); }
 .zone-sums b { color: var(--ink); font-weight: 640; }
+.alert { display: flex; gap: 10px; align-items: flex-start; padding: 9px 0; border-top: 1px solid var(--grid); }
+.alert:first-of-type { border-top: 0; }
+.alert i { flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; color: #fff; font: 700 12px/18px system-ui, sans-serif; text-align: center; }
+.alert i.warning { color: #0b0b0b; }
+.alert .main { min-width: 0; flex: 1; }
+.alert .title { font-weight: 620; font-size: 13.5px; color: inherit; }
+.alert .sub { color: var(--ink-2); font-size: 12.5px; }
+.alert .link { flex: none; font-size: 12.5px; min-height: 24px; }
 .write-error { color: var(--ink); font-size: 13px; margin-top: 6px; }
 .visit { display: block; padding: 10px 0; border-top: 1px solid var(--grid); color: inherit; text-decoration: none; }
 .visit .title { font-weight: 600; font-size: 13.5px; }
@@ -306,6 +314,18 @@ const INTENSITY_ZONES = [
   { id: "moderate", label: "Stredné", color: "var(--other)" },
   { id: "hard", label: "Náročné", color: "var(--run)" },
 ];
+// Tuned on two years of history: pulse +7 on 2 of 3 days fires about every 7 weeks, +5 twice as
+// often, and a single high day is usually a poor reading.
+const ALERT_REST_BPM = 7;
+const ALERT_REST_DAYS = 2;
+const ALERT_LOAD_RATIO = 1.75;
+const ALERT_MIN_WEEKLY_HOURS = 3;
+const ALERT_PAUSE_DAYS = 5;
+const ALERT_REGION_DAYS = 10;
+const ALERT_MISSED_PLANS = 2;
+const ALERT_STALE_DAYS = 2;
+const ALERT_HIDE_DAYS = 3;
+const ALERT_HIDDEN_KEY = "hidden_alerts";
 const MIN_TREND_POINTS = 3;
 // Below this a 100 m pace is a lap the watch cut wrong, not real swimming.
 const FASTEST_PACE_100M = 60;
@@ -1446,6 +1466,74 @@ function workoutPicker(fixedSport, fixedDay) {
   if (state.planError) box.append(h("p", { class: "write-error", text: state.planError }));
   return box;
 }
+function buildAlerts() {
+  const today = localDay(new Date());
+  const alerts = [];
+  const add = (id, tone, title, detail, href) => alerts.push({ id, tone, title, detail, href });
+
+  const rest = new Map(state.rest.map((r) => [r.day, r.bpm]));
+  const base = [];
+  for (let i = 3; i < 63; i++) {
+    const bpm = rest.get(addDays(today, -i));
+    if (bpm != null) base.push(bpm);
+  }
+  if (base.length >= 20) {
+    const normal = median(base);
+    const recent = [0, 1, 2].map((i) => rest.get(addDays(today, -i))).filter((bpm) => bpm != null);
+    const high = recent.filter((bpm) => bpm >= normal + ALERT_REST_BPM);
+    if (high.length >= ALERT_REST_DAYS) {
+      add("rest", "critical", "Pokojový tep je zvýšený", `${Math.max(...high)} bpm, bežne okolo ${normal}. Môže ísť o únavu, stres, alkohol alebo začínajúcu chorobu, zváž ľahší deň.`, "#/");
+    }
+  }
+
+  const hoursBetween = (from, to) => state.activities.reduce((sum, a) => {
+    const age = daysBetween(a.start_date_local.slice(0, 10), today);
+    return age >= from && age < to ? sum + duration(a) / 3600 : sum;
+  }, 0);
+  const week = hoursBetween(0, 7), usual = hoursBetween(7, 35) / 4;
+  if (usual >= ALERT_MIN_WEEKLY_HOURS && week >= usual * ALERT_LOAD_RATIO) {
+    add("load", "warning", "Prudký nárast záťaže", `${num(week, 1)} h za 7 dní, bežne ${num(usual, 1)} h. Daj si pozor na preťaženie.`, "#/kalendar");
+  }
+
+  const lastDay = state.activities.reduce((latest, a) => (a.start_date_local.slice(0, 10) > latest ? a.start_date_local.slice(0, 10) : latest), "");
+  const pause = lastDay ? daysBetween(lastDay, today) : 0;
+  if (pause >= ALERT_PAUSE_DAYS) add("pause", "warning", "Dlhšia pauza", `Posledný tréning bol pred ${plural(pause, "dňom", "dňami", "dňami")}.`, "#/kalendar");
+
+  const missed = state.plans.filter((plan) => plan.day < today && daysBetween(plan.day, today) <= 7 && !planDone(plan));
+  if (missed.length >= ALERT_MISSED_PLANS) add("missed", "warning", "Nesplnené plány", `Za posledný týždeň ${plural(missed.length, "nesplnený tréning", "nesplnené tréningy", "nesplnených tréningov")}. Možno je plán priveľa.`, "#/kalendar");
+
+  if (state.workouts[0] && daysBetween(state.workouts[0].day, today) < ALERT_REGION_DAYS) {
+    for (const region of REGIONS) {
+      const last = state.workouts.find((w) => regionsOf({ name: w.title }).includes(region) || w.region === "Celé telo");
+      const gap = last ? daysBetween(last.day, today) : null;
+      if (gap != null && gap >= ALERT_REGION_DAYS) add(`region-${region.id}`, "warning", `${region.label} je zanedbaná`, `Naposledy pred ${plural(gap, "dňom", "dňami", "dňami")}.`, "#/sila");
+    }
+  }
+
+  const synced = [...state.totals.keys()].reduce((latest, day) => (day > latest ? day : latest), "");
+  const stale = synced ? daysBetween(synced, today) : 0;
+  if (stale >= ALERT_STALE_DAYS) add("sync", "warning", "Apple Zdravie sa nesynchronizuje", `Posledné dáta sú staré ${plural(stale, "deň", "dni", "dní")}. Otvor aplikáciu a klikni na Sync Now.`, "#/");
+  return alerts;
+}
+function hiddenAlerts() {
+  try { return JSON.parse(localStorage.getItem(ALERT_HIDDEN_KEY)) ?? {}; } catch { return {}; }
+}
+function hideAlert(id) {
+  const hidden = hiddenAlerts();
+  hidden[id] = addDays(localDay(new Date()), ALERT_HIDE_DAYS);
+  try { localStorage.setItem(ALERT_HIDDEN_KEY, JSON.stringify(hidden)); } catch {}
+  render();
+}
+function alertsCard() {
+  const today = localDay(new Date());
+  const hidden = hiddenAlerts();
+  const alerts = buildAlerts().filter((alert) => !(hidden[alert.id] > today));
+  if (!alerts.length) return null;
+  return h("section", { class: "card" }, h("h2", { text: "Upozornenia" }), ...alerts.map((alert) => h("div", { class: "alert" },
+    Object.assign(h("i", { class: alert.tone, text: alert.tone === "critical" ? "×" : "!" }), { style: `background:var(--${alert.tone})` }),
+    h("div", { class: "main" }, h("a", { class: "title", href: alert.href, text: alert.title }), h("div", { class: "sub", text: alert.detail })),
+    h("button", { class: "link", text: "Skryť", "aria-label": `Skryť: ${alert.title}`, onclick: () => hideAlert(alert.id) }))));
+}
 function weekDates(offset) {
   const monday = addDays(mondayOf(localDay(new Date())), 7 * offset);
   return Array.from({ length: 7 }, (_, i) => addDays(monday, i));
@@ -2151,7 +2239,7 @@ function render() {
         measureCard("VO2 Max", "Kondícia podľa Apple Watch", state.vo2, "vo2_ml_per_min_per_kg", 1, "ml/kg/min", "var(--strength)")),
       h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")),
       loadCard(), workoutsCard()];
-    app.replaceChildren(head, tabs(page), weekCard(), filters(), ...cards.slice(0, 2), tiles(), ...cards.slice(2));
+    app.replaceChildren(head, tabs(page), ...[alertsCard(), weekCard()].filter(Boolean), filters(), ...cards.slice(0, 2), tiles(), ...cards.slice(2));
   }
   drawCharts();
 }
