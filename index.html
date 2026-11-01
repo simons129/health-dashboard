@@ -95,17 +95,53 @@ td.name { white-space: normal; min-width: 140px; }
 .region { margin-top: 12px; }
 .region-head { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; margin-bottom: 4px; }
 .region-head span:last-child { color: var(--ink-2); }
-.workout { border-top: 1px solid var(--grid); padding: 8px 0; margin: 0; }
-.workout:first-of-type { border-top: 0; }
-.workout summary { color: var(--ink); font-size: 14px; }
-.workout summary small { display: block; margin-left: 16px; color: var(--ink-2); font-size: 12.5px; }
-.exercise { padding: 8px 0 0 16px; }
-.exercise .name { font-weight: 600; font-size: 13.5px; }
-.exercise .tag { color: var(--ink-2); font-size: 12px; margin-top: 6px; padding-left: 16px; }
-.sets { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+nav.tabs { display: flex; gap: 4px; margin-bottom: 14px; border-bottom: 1px solid var(--grid); }
+nav.tabs a { padding: 8px 12px; color: var(--ink-2); text-decoration: none; font-weight: 550; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--ink); }
+.seg a { display: flex; align-items: center; min-height: 36px; padding: 0 12px; text-decoration: none; color: var(--ink); background: var(--surface); border: 1px solid var(--border); margin-left: -1px; }
+.seg a:first-child { border-radius: 7px 0 0 7px; margin-left: 0; }
+.seg a:last-child { border-radius: 0 7px 7px 0; }
+.seg a[aria-current=true] { background: var(--ink); color: var(--surface); }
+.sila { display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.sila .list { position: sticky; top: 10px; padding: 10px; }
+.sila .list .seg { margin-bottom: 8px; }
+.sila .list .seg a { flex: 1; justify-content: center; }
+.sila .list input { width: 100%; margin-bottom: 8px; }
+.rows { max-height: calc(100vh - 150px); overflow-y: auto; }
+.row { display: flex; gap: 10px; align-items: center; padding: 9px 8px; border-radius: 7px; color: inherit; text-decoration: none; }
+.row:hover { background: var(--wash); }
+.row[aria-current=true] { background: var(--wash); box-shadow: inset 3px 0 0 var(--hrv); }
+.row .date { flex: none; width: 46px; color: var(--ink-2); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.row .main { min-width: 0; flex: 1; }
+.row .title { font-weight: 600; font-size: 13.5px; }
+.row .sub { color: var(--ink-2); font-size: 12.5px; }
+.chev { color: var(--muted); flex: none; font-size: 18px; line-height: 1; }
+.back { display: none; color: var(--ink-2); text-decoration: none; padding: 4px 0 10px; }
+.facts { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 10px 0 6px; }
+.fact .label { color: var(--ink-2); font-size: 12.5px; }
+.fact .value { font-size: 19px; font-weight: 620; }
+.fact .value small { font-size: 12.5px; font-weight: 500; color: var(--ink-2); margin-left: 2px; }
+.ex { display: block; padding: 10px 8px; margin: 0 -8px; border-radius: 7px; border-top: 1px solid var(--grid); color: inherit; text-decoration: none; }
+.ex:hover { background: var(--wash); }
+.ex-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+.ex .name { font-weight: 600; font-size: 13.5px; }
+.ex .right { flex: none; color: var(--ink-2); font-size: 12.5px; display: flex; gap: 8px; align-items: baseline; }
+.hint { color: var(--ink-2); font-size: 12.5px; margin: 8px 0; }
+.ex-tag { color: var(--ink-2); font-size: 12px; margin: 10px 0 -6px; }
+.badge { border: 1px solid var(--hrv); border-radius: 5px; padding: 0 5px; font-size: 11.5px; color: var(--ink); }
+.sets { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .sets span { background: var(--wash); border-radius: 5px; padding: 1px 7px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
-.pick { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 4px 0 8px; }
-select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; min-height: 36px; padding: 0 8px; max-width: 100%; }
+.more { display: block; margin-top: 12px; color: var(--ink-2); text-decoration: none; font-size: 13px; }
+.more:hover { color: var(--ink); }
+.metric { margin: 12px 0 8px; }
+@media (max-width: 760px) {
+  .sila { grid-template-columns: minmax(0, 1fr); }
+  .sila .list { position: static; }
+  .rows { max-height: none; }
+  .sila[data-detail=true] .list, .sila[data-detail=true] ~ *, .sila-top[data-detail=true] { display: none; }
+  .sila[data-detail=false] .detail { display: none; }
+  .back { display: inline-block; }
+}
 .meter { height: 8px; border-radius: 4px; background: var(--wash); overflow: hidden; }
 .meter i { display: block; height: 100%; border-radius: 4px; background: var(--hrv); }
 .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 2px; }
@@ -159,7 +195,7 @@ const LEG_CARDIO_COST = 0.5;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], exercise: null };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -327,10 +363,11 @@ function recoverySeries(signals) {
 // Motra writes the whole workout into the Strava description.
 function parseWorkout(doc) {
   const { name, start_date_local: start, description } = doc.data;
+  const regions = regionsOf({ name });
   const workout = {
-    id: doc.id, day: start.slice(0, 10),
-    title: name.replace(/^Motra - /, "").replace(/^\w+ (Morning|Afternoon|Evening|Night) /, ""),
-    volume: 0, sets: 0, exercises: [],
+    id: doc.id, day: start.slice(0, 10), region: regions.length === REGIONS.length ? "Celé telo" : regions[0].label,
+    title: name.replace(/^Motra - /, "").replace(/^\w+ (Morning|Afternoon|Evening|Night) /, "").replace(/ (Strength )?(Session|Workout|Training|Focus)$/, ""),
+    time: /Duration:\s*(.+)/.exec(description)?.[1].trim().replace("h", " h").replace("m", " min") ?? "", volume: 0, sets: 0, exercises: [],
   };
   const volume = /^TVL:\s*([\d.]+)(K?)/.exec(description.trim().split(/\r?\n/).find((l) => l.startsWith("TVL:")) ?? "");
   if (volume) workout.volume = Number(volume[1]) * (volume[2] ? 1000 : 1);
@@ -574,7 +611,7 @@ function table(columns, rows) {
 function statusBadge([tone, icon, verdict]) {
   return h("div", { class: `status ${tone}` }, Object.assign(h("i", { text: icon }), { style: `background:var(--${tone})` }), verdict);
 }
-function strengthCard() {
+function strengthCard(withLink = true) {
   const regions = state.strength;
   const best = regions.reduce((a, b) => (b.score > a.score || (b.score === a.score && b.sessions < a.sessions) ? b : a));
   const lowRecovery = state.recovery.at(-1)?.day === localDay(new Date()) && state.recovery.at(-1).score < 34;
@@ -595,62 +632,174 @@ function strengthCard() {
       h("div", { class: "meter", role: "img", "aria-label": `${region.label}: ${region.score} percent` },
         Object.assign(h("i"), { style: `width:${region.score}%` }))));
   }
+  if (withLink) card.append(h("a", { class: "more", href: "#/sila", text: "Tréningy a cviky ›" }));
   return card;
 }
-function workoutsLogCard() {
-  const { from } = periods();
-  const list = state.workouts.filter((w) => w.day >= from);
-  const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("div", {},
-    h("h2", { text: "Silové tréningy" }),
-    h("p", { class: "note", text: "Cviky, série a váhy z Motry" }))));
-  if (!list.length) { card.append(h("div", { class: "empty", text: "V tomto období nie sú silové tréningy." })); return card; }
-  list.forEach((w, i) => {
-    const facts = [shortDate(w.day), `${w.exercises.length} cvikov`, `${w.sets} sérií`, `${num(w.volume / 1000, 1)} t`].join(" · ");
-    card.append(h("details", { class: "workout", ...(i === 0 ? { open: "" } : {}) },
-      h("summary", {}, w.title, h("small", { text: facts })),
-      ...w.exercises.map((e) => h("div", { class: "exercise" },
-        h("div", { class: "name", text: e.superset ? `${e.name} (superset)` : e.name }),
-        h("div", { class: "sets" }, ...e.sets.map((set) => h("span", { text: setLabel(set) })))))));
-  });
-  return card;
+// Every exercise across all workouts, oldest session first, for records and comparisons.
+function exerciseIndex() {
+  const index = new Map();
+  for (const workout of [...state.workouts].reverse()) {
+    for (const e of workout.exercises) {
+      if (!index.has(e.name)) index.set(e.name, { name: e.name, sessions: [] });
+      const entry = index.get(e.name);
+      const weighted = e.sets.filter((set) => set.kg);
+      const top = weighted.reduce((a, b) => (!a || b.kg > a.kg || (b.kg === a.kg && b.reps > a.reps) ? b : a), null);
+      const best = Math.max(0, ...entry.sessions.map((p) => p.top?.kg ?? 0));
+      entry.sessions.push({
+        workout, sets: e.sets, top,
+        record: !!top && entry.sessions.some((p) => p.top) && top.kg > best,
+        change: top && best ? top.kg - entry.sessions.findLast((p) => p.top).top.kg : null,
+        orm: Math.max(0, ...weighted.map((set) => set.kg * (1 + set.reps / 30))),
+        volume: weighted.reduce((sum, set) => sum + set.kg * set.reps * (set.perSide ? 2 : 1), 0),
+        reps: Math.max(0, ...e.sets.map((set) => set.reps ?? 0)),
+      });
+    }
+  }
+  return index;
 }
-function exerciseHistory(name) {
-  return state.workouts.flatMap((w) => {
-    const sets = w.exercises.filter((e) => e.name === name).flatMap((e) => e.sets).filter((set) => set.kg);
-    if (!sets.length) return [];
-    const top = sets.reduce((a, b) => (b.kg > a.kg || (b.kg === a.kg && b.reps > a.reps) ? b : a));
-    return [{ day: w.day, top, count: sets.length }];
-  }).reverse();
+const signed = (kg) => `${kg > 0 ? "+" : "−"}${num(Math.abs(kg), kg % 1 ? 1 : 0)} kg`;
+const kgText = (kg) => `${num(kg, kg % 1 ? 1 : 0)} kg`;
+const workoutHref = (id) => `#/sila/trening/${id}`;
+const exerciseHref = (name) => `#/sila/cvik/${encodeURIComponent(name)}`;
+
+function fact(label, value, unit) {
+  return h("div", { class: "fact" }, h("div", { class: "label", text: label }), h("div", { class: "value" }, value, unit && h("small", { text: unit })));
 }
-function progressCard() {
-  const counts = new Map();
-  for (const w of state.workouts) for (const e of w.exercises) if (e.sets.some((set) => set.kg)) counts.set(e.name, (counts.get(e.name) ?? 0) + 1);
-  const names = [...counts].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([name]) => name);
-  const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("div", {},
-    h("h2", { text: "Vývoj cviku" }),
-    h("p", { class: "note", text: "Najvyššia váha v tréningu" }))));
-  if (!names.length) { card.append(h("div", { class: "empty", text: "Zatiaľ nie je dosť tréningov." })); return card; }
-  if (!names.includes(state.exercise)) state.exercise = names[0];
-  const body = h("div", {});
-  const draw = () => {
-    const list = exerciseHistory(state.exercise);
-    const start = list[0].day, end = list[list.length - 1].day;
+function setChips(sets) {
+  return h("div", { class: "sets" }, ...sets.map((set) => h("span", { text: setLabel(set) })));
+}
+function workoutRow(w, active) {
+  return h("a", { class: "row", href: workoutHref(w.id), "aria-current": String(active) },
+    h("div", { class: "date", text: shortDate(w.day) }),
+    h("div", { class: "main" }, h("div", { class: "title", text: w.region }),
+      h("div", { class: "sub", text: `${w.sets} sérií · ${num(w.volume / 1000, 1)} t · ${w.exercises.length} cvikov` })),
+    h("span", { class: "chev", text: "›", "aria-hidden": "true" }));
+}
+function exerciseRow(entry, active) {
+  const last = entry.sessions[entry.sessions.length - 1];
+  const summary = last.top ? kgText(last.top.kg) : last.reps ? `${last.reps} opak.` : setLabel(last.sets[0]);
+  const row = h("a", { class: "row", href: exerciseHref(entry.name), "aria-current": String(active), "data-name": entry.name.toLowerCase() },
+    h("div", { class: "main" }, h("div", { class: "title", text: entry.name }),
+      h("div", { class: "sub", text: `${shortDate(last.workout.day)} · ${summary} · ${entry.sessions.length}×` })),
+    h("span", { class: "chev", text: "›", "aria-hidden": "true" }));
+  row.hidden = !entry.name.toLowerCase().includes(state.search.toLowerCase());
+  return row;
+}
+function backLink(href, label) {
+  return h("a", { class: "back", href, text: `‹ ${label}` });
+}
+function workoutPane(workout, index) {
+  const pane = h("section", { class: "card detail" }, backLink("#/sila", "Tréningy"),
+    h("h2", { text: workout.region }),
+    h("p", { class: "note", text: `${fullDate(workout.day)} · ${workout.title}` }),
+    h("div", { class: "facts" }, fact("Objem", num(workout.volume / 1000, 1), "t"), fact("Série", String(workout.sets)),
+      fact("Cviky", String(workout.exercises.length)), workout.time && fact("Čas", workout.time)),
+    h("p", { class: "hint", text: "Vpravo je zmena najvyššej váhy oproti minulému tréningu. Klikni na cvik pre jeho históriu." }));
+  let inSuperset = false;
+  for (const e of workout.exercises) {
+    if (e.superset && !inSuperset) pane.append(h("div", { class: "ex-tag", text: "Superset" }));
+    inSuperset = e.superset;
+    const session = index.get(e.name).sessions.find((p) => p.workout === workout);
+    pane.append(h("a", { class: "ex", href: exerciseHref(e.name) },
+      h("div", { class: "ex-head" }, h("span", { class: "name", text: e.name }),
+        h("span", { class: "right" },
+          session.record ? h("span", { class: "badge", text: "Rekord" }) : null,
+          session.change ? h("span", { text: signed(session.change) }) : null,
+          h("span", { class: "chev", text: "›", "aria-hidden": "true" }))),
+      setChips(e.sets)));
+  }
+  return pane;
+}
+function exercisePane(entry) {
+  const sessions = entry.sessions;
+  const weighted = sessions.filter((p) => p.top);
+  const metrics = weighted.length
+    ? { weight: ["Váha", "kg", (p) => p.top.kg], orm: ["Odhad 1RM", "kg", (p) => Math.round(p.orm * 10) / 10], volume: ["Objem", "kg", (p) => p.volume] }
+    : { reps: ["Opakovania", "", (p) => p.reps] };
+  const key = state.metric in metrics ? state.metric : Object.keys(metrics)[0];
+  const [metricLabel, unit, metricValue] = metrics[key];
+  const points = (weighted.length ? weighted : sessions).filter((p) => metricValue(p));
+  const pane = h("section", { class: "card detail" }, backLink("#/sila/cviky", "Cviky"),
+    h("h2", { text: entry.name }),
+    h("p", { class: "note", text: `${sessions.length}× od ${shortDate(sessions[0].workout.day)}` }));
+
+  const last = sessions[sessions.length - 1];
+  if (weighted.length) {
+    const record = weighted.reduce((a, b) => (b.top.kg >= a.top.kg ? b : a));
+    pane.append(h("div", { class: "facts" },
+      fact("Rekord", kgText(record.top.kg), `${shortDate(record.workout.day)}`),
+      fact("Naposledy", weighted.at(-1).top ? setLabel(weighted.at(-1).top) : "–"),
+      fact("Odhad 1RM", `${num(Math.max(...weighted.map((p) => p.orm)))} kg`)));
+  } else {
+    pane.append(h("div", { class: "facts" }, fact("Naposledy", setLabel(last.sets[0]))));
+  }
+
+  if (Object.keys(metrics).length > 1) {
+    pane.append(h("div", { class: "seg metric", role: "group", "aria-label": "Zobrazená hodnota" },
+      ...Object.entries(metrics).map(([id, [label]]) => h("button", { "aria-pressed": String(id === key), text: label,
+        onclick: () => { state.metric = id; render(); } }))));
+  }
+  if (points.length >= 2) {
+    const start = points[0].workout.day, end = points[points.length - 1].workout.day;
     const chart = h("div", { class: "chart" });
-    body.replaceChildren(chart, table([{ label: "Deň" }, { label: "Najvyššia váha" }, { label: "Série", num: true }],
-      list.slice().reverse().map((d) => [fullDate(d.day), setLabel(d.top), String(d.count)])));
+    const values = points.map(metricValue);
+    const show = (v) => `${num(v, v % 1 ? 1 : 0)}${unit ? ` ${unit}` : ""}`;
     chart.draw = () => lineChart(chart, {
-      height: 200, x: list.map((d) => daysBetween(start, d.day)), xMin: 0, xMax: daysBetween(start, end), xTicks: dateAxis(start, end),
-      series: [{ color: "var(--hrv)", values: list.map((d) => d.top.kg) }, { color: "var(--hrv)", values: list.map((d) => d.top.kg), dots: true }],
-      label: `Vývoj váhy: ${state.exercise}`,
-      read: (i) => ({ title: fullDate(list[i].day), rows: [{ color: "var(--hrv)", value: setLabel(list[i].top), label: "" }] }),
+      height: 200, x: points.map((p) => daysBetween(start, p.workout.day)), xMin: 0, xMax: Math.max(daysBetween(start, end), 1), xTicks: dateAxis(start, end),
+      series: [{ color: "var(--hrv)", values }, { color: "var(--hrv)", values, dots: true }],
+      label: `${metricLabel}: ${entry.name}`,
+      read: (i) => ({ title: fullDate(points[i].workout.day), rows: [{ color: "var(--hrv)", value: show(values[i]), label: metricLabel }] }),
     });
-    chart.draw();
-  };
-  const select = h("select", { "aria-label": "Cvik", onchange: (event) => { state.exercise = event.target.value; draw(); } },
-    ...names.map((name) => { const o = h("option", { value: name, text: `${name} (${counts.get(name)}×)` }); o.selected = name === state.exercise; return o; }));
-  card.append(h("div", { class: "pick" }, select), body);
-  card.drawProgress = draw;
-  return card;
+    pane.append(chart);
+  } else {
+    pane.append(h("p", { class: "note", text: "Graf sa zobrazí po druhom tréningu s týmto cvikom." }));
+  }
+
+  pane.append(h("h2", { text: "História", style: "margin-top:16px" }),
+    h("p", { class: "hint", text: "Vpravo je zmena najvyššej váhy oproti predchádzajúcemu tréningu." }));
+  for (const p of [...sessions].reverse()) {
+    pane.append(h("a", { class: "ex", href: workoutHref(p.workout.id) },
+      h("div", { class: "ex-head" }, h("span", { class: "name", text: fullDate(p.workout.day) }),
+        h("span", { class: "right" },
+          p.record ? h("span", { class: "badge", text: "Rekord" }) : null,
+          p.change ? h("span", { text: signed(p.change) }) : null,
+          h("span", { class: "chev", text: "›", "aria-hidden": "true" }))),
+      setChips(p.sets)));
+  }
+  return pane;
+}
+function strengthView() {
+  const { kind, id } = route();
+  if (!state.workouts.length) return [h("section", { class: "card" }, h("div", { class: "empty", text: "Zatiaľ nie sú silové tréningy." }))];
+  const index = exerciseIndex();
+  const workout = kind === "trening" ? state.workouts.find((w) => w.id === id) : null;
+  const entry = kind === "cvik" ? index.get(id) : null;
+  const showExercises = kind === "cviky" || !!entry;
+  const hasDetail = !!(workout || entry);
+
+  const list = h("div", { class: "rows" });
+  if (showExercises) {
+    const entries = [...index.values()].sort((a, b) => b.sessions.at(-1).workout.day.localeCompare(a.sessions.at(-1).workout.day) || b.sessions.length - a.sessions.length);
+    list.append(...entries.map((e) => exerciseRow(e, e === entry)));
+  } else {
+    list.append(...state.workouts.map((w) => workoutRow(w, w === (workout ?? (hasDetail ? null : state.workouts[0])))));
+  }
+  const search = showExercises ? h("input", { type: "search", value: state.search, placeholder: "Hľadať cvik", "aria-label": "Hľadať cvik",
+    oninput: (event) => {
+      state.search = event.target.value;
+      const term = state.search.toLowerCase();
+      list.querySelectorAll(".row").forEach((row) => { row.hidden = !row.dataset.name.includes(term); });
+    } }) : null;
+  const aside = h("aside", { class: "card list" },
+    h("div", { class: "seg", role: "group", "aria-label": "Zoznam" },
+      h("a", { href: "#/sila", "aria-current": String(!showExercises), text: "Tréningy" }),
+      h("a", { href: "#/sila/cviky", "aria-current": String(showExercises), text: "Cviky" })),
+    search, list);
+  const detail = entry ? exercisePane(entry) : workoutPane(workout ?? state.workouts[0], index);
+  return [
+    h("div", { class: "sila-top", "data-detail": String(hasDetail) }, strengthCard(false)),
+    h("div", { class: "sila", "data-detail": String(hasDetail) }, aside, detail),
+  ];
 }
 function recoveryCard() {
   const list = state.recovery;
@@ -873,13 +1022,14 @@ function workoutsCard() {
     h("thead", {}, h("tr", {}, ...[["Deň"], ["Šport"], ["Názov", "name"], ["Čas", "num"], ["Vzdialenosť", "num"], ["Tep", "num"]].map(([label, cls]) => h("th", { ...(cls ? { class: cls } : {}), text: label })))),
     h("tbody", {}, ...activities.map((a) => {
       const day = a.start_date_local.slice(0, 10);
+      const lifted = a.sport_type === "WeightTraining" && state.workouts.some((w) => w.id === String(a.id));
       const cells = [
         [h("button", { class: "link", text: shortDate(day), title: "Zobraziť tep v tento deň", onclick: () => selectDay(day) })],
         SPORT_NAMES[a.sport_type] ?? a.sport_type,
         a.name,
       ];
       return h("tr", {},
-        h("td", {}, ...cells[0]), h("td", { text: cells[1] }), h("td", { class: "name", text: cells[2] }),
+        h("td", {}, ...cells[0]), h("td", { text: cells[1] }), h("td", { class: "name" }, lifted ? h("a", { href: workoutHref(a.id), text: cells[2] }) : cells[2]),
         h("td", { class: "num", text: hours(duration(a)) }),
         h("td", { class: "num", text: a.distance ? `${num(a.distance / 1000, 1)} km` : "–" }),
         h("td", { class: "num", text: a.average_heartrate ? num(a.average_heartrate) : "–" }));
@@ -903,14 +1053,25 @@ function filters() {
       h("input", { type: "date", value: state.day, max: today, "aria-label": "Deň pre graf tepu", onchange: (e) => e.target.value && selectDay(e.target.value) }),
       state.day < today ? h("button", { "aria-label": "Nasledujúci deň", text: "›", onclick: () => selectDay(addDays(state.day, 1)) }) : null));
 }
+function route() {
+  const [, page = "prehlad", kind = "", id = ""] = location.hash.slice(1).split("/");
+  return { page: page || "prehlad", kind, id: decodeURIComponent(id) };
+}
+function tabs(page) {
+  const tab = (id, href, label) => h("a", { href, text: label, ...(page === id ? { "aria-current": "page" } : {}) });
+  return h("nav", { class: "tabs" }, tab("prehlad", "#/", "Prehľad"), tab("sila", "#/sila", "Sila"));
+}
 function render() {
-  const progress = progressCard();
-  const cards = [h("div", { class: "grid2" }, strengthCard(), recoveryCard()), workoutsLogCard(), progress, readinessCard(), dayCard(), h("div", { class: "grid2" }, hrvCard(), lowHrCard()), loadCard(), workoutsCard()];
-  app.replaceChildren(
-    h("header", {}, h("h1", { text: "Zdravie" }), h("button", { class: "link", text: "Odhlásiť", onclick: logout })),
-    filters(), ...cards.slice(0, 3), cards[3], tiles(), ...cards.slice(4));
+  const { page } = route();
+  const head = h("header", {}, h("h1", { text: "Zdravie" }), h("button", { class: "link", text: "Odhlásiť", onclick: logout }));
+  if (page === "sila") {
+    app.replaceChildren(head, tabs(page), ...strengthView());
+  } else {
+    const cards = [h("div", { class: "grid2" }, strengthCard(), recoveryCard()), readinessCard(), dayCard(),
+      h("div", { class: "grid2" }, hrvCard(), lowHrCard()), loadCard(), workoutsCard()];
+    app.replaceChildren(head, tabs(page), filters(), ...cards.slice(0, 2), tiles(), ...cards.slice(2));
+  }
   drawCharts();
-  progress.drawProgress?.();
 }
 function showError() {
   app.classList.remove("loading");
@@ -958,6 +1119,12 @@ function login(message) {
     h("p", { class: "note", text: "Zadaj API kľúč. Uloží sa len v tomto prehliadači." }), form));
   input.focus();
 }
+
+addEventListener("hashchange", () => {
+  if (!state.trend) return;
+  render();
+  scrollTo(0, 0);
+});
 
 let resizeTimer;
 addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawCharts, 120); });
