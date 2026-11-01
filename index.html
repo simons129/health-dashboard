@@ -187,6 +187,14 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .plan .state { color: var(--ink-2); font-size: 12.5px; white-space: nowrap; }
 .plan ul { margin: 4px 0 0; padding-left: 16px; color: var(--ink-2); font-size: 12.5px; }
 .plan .link { min-height: 28px; padding: 0; font-size: 12.5px; }
+.week-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin: 10px 0; }
+.week-day { text-align: center; color: var(--ink-2); font-size: 12px; text-decoration: none; }
+.week-day .day { margin-top: 3px; }
+.goals { display: flex; flex-wrap: wrap; gap: 8px 22px; margin: 10px 0 4px; }
+.proposal { margin-top: 10px; border-left: 3px solid var(--hrv); padding-left: 10px; }
+.proposal-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 13.5px; min-height: 32px; }
+.proposal-row .link { font-size: 12.5px; min-height: 28px; }
+.week-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .write-error { color: var(--ink); font-size: 13px; margin-top: 6px; }
 .visit { display: block; padding: 10px 0; border-top: 1px solid var(--grid); color: inherit; text-decoration: none; }
 .visit .title { font-weight: 600; font-size: 13.5px; }
@@ -270,6 +278,10 @@ const MUSCLES = [
 ];
 const SPORT_RANGES = [[90, "3 mes."], [182, "6 mes."], [365, "1 rok"], [0, "Všetko"]];
 const FUTURE_WEEKS = 4;
+// Strength first for the winter. Monday is day 0, Sunday stays free, the same part never
+// repeats inside its recovery time and the second run sits after upper body work.
+const WEEK_TEMPLATE = [[0, "sila", "upper"], [1, "beh", "easy"], [2, "sila", "lower"], [3, "plavanie", "sets"], [4, "sila", "upper"], [4, "beh", "easy"], [5, "sila", "lower"]];
+const WEEKDAY_NAMES = ["Po", "Ut", "St", "Št", "Pi", "So", "Ne"];
 // Share of maximum heart rate.
 const ZONES = { easy: [0.65, 0.78], tempo: [0.84, 0.9], hard: [0.9, 0.95] };
 const PLAN_SPORTS = {
@@ -324,7 +336,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], plans: [], pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -1162,7 +1174,7 @@ function calendarView() {
         "aria-current": String(day === selected), "aria-label": `${shortDate(day)}: ${summary}`, title: `${shortDate(day)}: ${summary}` },
         ...list.slice(0, 2).map((item) => h("span", { class: item.group.id === "other" ? "light" : "", style: `background:var(--${groups.get(item.group.id).id})`, text: item.mark })),
         ...plansOn(day).filter((plan) => !planDone(plan)).slice(0, 2 - Math.min(list.length, 2)).map((plan) =>
-          h("span", { class: "planned", style: `--plan:var(--${PLAN_SPORTS[plan.sport].color})`, text: PLAN_SPORTS[plan.sport].mark }))));
+          h("span", { class: "planned", style: `--plan:var(--${PLAN_SPORTS[plan.sport].color})`, text: planMark(plan) }))));
     }
     grid.append(h("span", { class: "count", text: seconds ? `${num(seconds / 3600, 1)} h` : "" }));
   }
@@ -1381,6 +1393,8 @@ function planDone(plan) {
   const types = PLAN_SPORTS[plan.sport].types;
   return state.activities.some((a) => a.start_date_local.slice(0, 10) === plan.day && types.includes(a.sport_type));
 }
+const PLAN_LETTERS = { upper: "H", lower: "S", full: "C" };
+const planMark = (plan) => (plan.sport === "sila" ? PLAN_LETTERS[plan.type] : PLAN_SPORTS[plan.sport].mark);
 function plansOn(day) {
   return state.plans.filter((plan) => plan.day === day);
 }
@@ -1388,7 +1402,7 @@ function planRow(plan) {
   const today = localDay(new Date());
   const status = planDone(plan) ? "✓ Splnené" : plan.day < today ? "Nesplnené" : "Naplánované";
   return h("div", { class: "plan" },
-    h("div", { class: "plan-head" }, h("span", { class: "title", text: `${PLAN_SPORTS[plan.sport].mark} ${plan.title}` }), h("span", { class: "state", text: status })),
+    h("div", { class: "plan-head" }, h("span", { class: "title", text: plan.sport === "sila" ? plan.title : `${planMark(plan)} ${plan.title}` }), h("span", { class: "state", text: status })),
     h("ul", {}, ...plan.steps.map((step) => h("li", { text: step }))),
     h("button", { class: "link", text: "Odstrániť", onclick: () => removePlan(plan.id) }));
 }
@@ -1416,10 +1430,105 @@ function workoutPicker(fixedSport, fixedDay) {
   if (state.planError) box.append(h("p", { class: "write-error", text: state.planError }));
   return box;
 }
-function todayPlanCard() {
-  const plans = plansOn(localDay(new Date()));
-  if (!plans.length) return null;
-  return h("section", { class: "card" }, h("h2", { text: "Dnes v pláne" }), ...plans.map(planRow));
+function weekDates(offset) {
+  const monday = addDays(mondayOf(localDay(new Date())), 7 * offset);
+  return Array.from({ length: 7 }, (_, i) => addDays(monday, i));
+}
+function weekGoals() {
+  const goals = {};
+  for (const [, sport] of WEEK_TEMPLATE) goals[sport] = (goals[sport] ?? 0) + 1;
+  return goals;
+}
+function activitiesIn(days, sport) {
+  const types = PLAN_SPORTS[sport].types;
+  return state.activities.filter((a) => days.includes(a.start_date_local.slice(0, 10)) && types.includes(a.sport_type));
+}
+// Only what is still open: finished training and plans already in the calendar use up the goal.
+function weekProposal(days) {
+  const today = localDay(new Date());
+  const open = weekGoals();
+  for (const sport of Object.keys(open)) {
+    open[sport] -= activitiesIn(days, sport).length;
+    open[sport] -= state.plans.filter((plan) => plan.sport === sport && days.includes(plan.day) && plan.day >= today && !planDone(plan)).length;
+  }
+  const proposal = [];
+  for (const [index, sport, type] of WEEK_TEMPLATE) {
+    if (days[index] < today || open[sport] <= 0) continue;
+    if (state.plans.some((plan) => plan.day === days[index] && plan.sport === sport)) continue;
+    open[sport]--;
+    proposal.push({ day: days[index], sport, type });
+  }
+  return proposal;
+}
+async function saveProposal() {
+  const items = state.proposal;
+  const saved = [];
+  try {
+    for (const { day, sport, type } of items) {
+      const suggestion = workoutSuggestion(sport, type);
+      const plan = { day, sport, type, title: suggestion.title, steps: suggestion.steps };
+      const id = crypto.randomUUID();
+      await write("PUT", `/api/plans/${id}`, plan);
+      saved.push({ id, ...plan });
+    }
+    state.planError = "";
+    state.proposal = null;
+  } catch {
+    state.planError = `Uložilo sa ${saved.length} z ${items.length} tréningov. Skús to znova.`;
+    state.proposal = items.slice(saved.length);
+  }
+  state.plans = [...state.plans, ...saved].sort((a, b) => a.day.localeCompare(b.day));
+  render();
+}
+function weekCard() {
+  const today = localDay(new Date());
+  const days = weekDates(state.weekView);
+  const activities = activityDays();
+  const goals = weekGoals();
+  const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Môj týždeň" }),
+    h("div", { class: "seg", role: "group", "aria-label": "Týždeň" }, ...[[0, "Tento"], [1, "Budúci"]].map(([offset, label]) =>
+      h("button", { "aria-pressed": String(state.weekView === offset), text: label, onclick: () => { state.weekView = offset; state.proposal = null; render(); } })))));
+
+  card.append(h("div", { class: "week-days" }, ...days.map((day, i) => {
+    const done = activities.get(day) ?? [];
+    const planned = plansOn(day).filter((plan) => !planDone(plan));
+    return h("a", { class: "week-day", href: `#/kalendar/${day}`, "aria-label": `${WEEKDAY_NAMES[i]} ${shortDate(day)}` }, WEEKDAY_NAMES[i],
+      h("div", { class: `day${day === today ? " today" : ""}${day > today ? " future" : ""}` },
+        ...done.slice(0, 2).map((item) => h("span", { class: item.group.id === "other" ? "light" : "", style: `background:var(--${item.group.id})`, text: item.mark })),
+        ...planned.slice(0, Math.max(2 - done.length, 0)).map((plan) => h("span", { class: "planned", style: `--plan:var(--${PLAN_SPORTS[plan.sport].color})`, text: planMark(plan) }))));
+  })));
+
+  const kilometres = ["beh", "bicykel", "plavanie"].flatMap((sport) => activitiesIn(days, sport)).reduce((sum, a) => sum + a.distance, 0) / 1000;
+  const sets = state.workouts.filter((w) => days.includes(w.day)).reduce((sum, w) => sum + w.sets, 0);
+  const weekPlans = state.plans.filter((plan) => days.includes(plan.day));
+  card.append(h("div", { class: "goals" },
+    ...Object.entries(goals).map(([sport, goal]) => fact(PLAN_SPORTS[sport].label, `${activitiesIn(days, sport).length} z ${goal}`)),
+    fact("Série", String(sets)), fact("Vytrvalosť", num(kilometres, 1), "km"),
+    weekPlans.length ? fact("Plán splnený", `${weekPlans.filter(planDone).length} z ${weekPlans.length}`) : null));
+
+  if (state.weekView === 0) card.append(...plansOn(today).map(planRow));
+
+  const offer = weekProposal(days);
+  if (state.proposal) {
+    const box = h("div", { class: "proposal" }, h("div", { class: "group-head", text: "Návrh plánu" }));
+    state.proposal.forEach((item, index) => {
+      const suggestion = workoutSuggestion(item.sport, item.type);
+      box.append(h("div", { class: "proposal-row" },
+        h("span", { text: `${WEEKDAY_NAMES[days.indexOf(item.day)]} ${shortDate(item.day)}: ${item.sport === "sila" ? "" : `${PLAN_SPORTS[item.sport].mark} `}${suggestion.title}` }),
+        h("button", { class: "link", text: "Odobrať", onclick: () => { state.proposal = state.proposal.filter((_, i) => i !== index); render(); } })));
+    });
+    card.append(box, h("div", { class: "week-actions" },
+      h("button", { class: "primary", text: "Uložiť do kalendára", ...(state.proposal.length ? {} : { disabled: "" }), onclick: saveProposal }),
+      h("button", { text: "Zrušiť", onclick: () => { state.proposal = null; render(); } })));
+  } else if (offer.length) {
+    card.append(h("div", { class: "week-actions" }, h("button", { class: "primary", text: "Naplánovať týždeň", onclick: () => { state.proposal = offer; render(); } })));
+  } else if (state.weekView === 0 && weekProposal(weekDates(1)).length) {
+    card.append(h("div", { class: "week-actions" }, h("button", { class: "primary", text: "Naplánovať budúci týždeň", onclick: () => { state.weekView = 1; state.proposal = weekProposal(weekDates(1)); render(); } })));
+  } else {
+    card.append(h("p", { class: "hint", text: "Týždeň je naplánovaný." }));
+  }
+  if (state.planError) card.append(h("p", { class: "write-error", text: state.planError }));
+  return card;
 }
 function swimCard(swim) {
   const card = h("section", { class: "card" }, h("h2", { text: `Série, ${fullDate(swim.day)}` }),
@@ -1930,7 +2039,7 @@ function render() {
         measureCard("VO2 Max", "Kondícia podľa Apple Watch", state.vo2, "vo2_ml_per_min_per_kg", 1, "ml/kg/min", "var(--strength)")),
       h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")),
       loadCard(), workoutsCard()];
-    app.replaceChildren(head, tabs(page), filters(), ...[todayPlanCard(), ...cards.slice(0, 2), tiles(), ...cards.slice(2)].filter(Boolean));
+    app.replaceChildren(head, tabs(page), weekCard(), filters(), ...cards.slice(0, 2), tiles(), ...cards.slice(2));
   }
   drawCharts();
 }
