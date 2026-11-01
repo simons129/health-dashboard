@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Zdravie</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231e2952'/%3E%3Cpath d='M5 17h6l3-7 4 13 3-9 2 3h4' fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #6f6e68;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10); --wash: rgba(11,11,11,.05);
+  --hr: #e34948; --hrv: #6250d6;
+  --ride: #2a78d6; --run: #eb6834; --strength: #1baf7a; --other: #eda100;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #9c9a92;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.07);
+    --hr: #e66767; --hrv: #9085e9;
+    --ride: #3987e5; --run: #d95926; --strength: #199e70; --other: #c98500;
+  }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+main {
+  max-width: 1080px; margin: 0 auto;
+  padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 14px; }
+h1 { margin: 0; font-size: 22px; font-weight: 650; }
+h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.note { color: var(--ink-2); font-size: 13px; margin: 2px 0 0; }
+button, input {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 7px; min-height: 36px; padding: 0 11px;
+}
+button { cursor: pointer; }
+button:hover { background: var(--wash); }
+:focus-visible { outline: 2px solid var(--ride); outline-offset: 1px; }
+.link { border: 0; background: none; color: var(--ink-2); padding: 0 4px; }
+.filters { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 16px; }
+.seg { display: flex; }
+.seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 7px 0 0 7px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 7px 7px 0; }
+.seg button[aria-pressed=true] { background: var(--ink); color: var(--surface); }
+.daypick { display: flex; gap: 4px; align-items: center; }
+.daypick button { width: 36px; padding: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.tile, .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.tile { padding: 12px 14px; }
+.tile .label { color: var(--ink-2); font-size: 13px; }
+.tile .value { font-size: 26px; font-weight: 620; line-height: 1.25; }
+.tile .value small { font-size: 14px; font-weight: 500; color: var(--ink-2); margin-left: 3px; }
+.tile.hero { grid-column: span 2; }
+.tile.hero .value { font-size: 50px; line-height: 1.1; }
+.tile .delta { color: var(--ink-2); font-size: 12.5px; }
+@media (max-width: 400px) { .tile.hero { grid-column: 1 / -1; } }
+.card { padding: 14px 16px; margin-bottom: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; }
+.grid2 .card { margin-bottom: 0; }
+.grid2 { margin-bottom: 12px; }
+.card-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-2); font-size: 12.5px; align-items: center; }
+.legend i { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.legend i.line { height: 2px; width: 16px; border-radius: 1px; vertical-align: 3px; }
+.legend i.dot { width: 8px; height: 8px; border-radius: 50%; vertical-align: 1px; }
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; touch-action: pan-y; }
+.chart svg:focus-visible { outline-offset: 2px; }
+.chart text { fill: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.chart text.region { fill: var(--ink-2); }
+.empty { color: var(--ink-2); padding: 32px 0; text-align: center; }
+details { margin-top: 8px; }
+summary { cursor: pointer; color: var(--ink-2); font-size: 13px; min-height: 24px; }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; color: var(--ink-2); font-weight: 500; }
+th, td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.name { white-space: normal; min-width: 140px; }
+@media (max-width: 560px) { th.name, td.name { display: none; } }
+#tip {
+  position: fixed; z-index: 10; pointer-events: none; min-width: 120px; max-width: 240px;
+  padding: 7px 10px; border-radius: 8px; font-size: 12.5px;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0,0,0,.14);
+}
+#tip .title { color: var(--ink-2); margin-bottom: 2px; }
+#tip .row { display: flex; gap: 7px; align-items: center; }
+#tip .row b { font-weight: 650; }
+#tip .row span { color: var(--ink-2); }
+#tip .row i { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+.loading .tiles, .loading .card { opacity: .55; }
+.login { max-width: 360px; margin: 14vh auto 0; }
+.login form { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.login input { width: 100%; }
+.error { color: var(--ink); font-size: 13px; }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<div id="tip" hidden></div>
+
+<script>
+const API = "https://backend.servatka29.workers.dev";
+const KEY_NAME = "backend_api_key";
+const GROUPS = [
+  { id: "ride", label: "Bicykel", sports: ["Ride", "VirtualRide", "EBikeRide", "GravelRide", "MountainBikeRide"] },
+  { id: "run", label: "Beh", sports: ["Run", "TrailRun", "VirtualRun"] },
+  { id: "strength", label: "Sila", sports: ["WeightTraining", "Workout", "Crossfit"] },
+  { id: "other", label: "Ostatné", sports: [] },
+];
+const SPORT_NAMES = {
+  Ride: "Bicykel", VirtualRide: "Bicykel", Run: "Beh", TrailRun: "Beh", WeightTraining: "Sila",
+  Workout: "Tréning", Swim: "Plávanie", Walk: "Chôdza", Hike: "Turistika",
+};
+const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
+
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null };
+
+function storedKey() {
+  try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
+}
+function saveKey(value) {
+  try { value ? localStorage.setItem(KEY_NAME, value) : localStorage.removeItem(KEY_NAME); } catch {}
+}
+let apiKey = storedKey();
+
+/* Helpers */
+const SVG_NS = "http://www.w3.org/2000/svg";
+function h(tag, attrs = {}, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "text") el.textContent = v;
+    else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v);
+  }
+  el.append(...kids.filter(Boolean));
+  return el;
+}
+function s(tag, attrs = {}, ...kids) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) k === "text" ? (el.textContent = v) : el.setAttribute(k, v);
+  el.append(...kids.filter(Boolean));
+  return el;
+}
+function localDay(date) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+function addDays(day, n) {
+  const d = new Date(`${day}T12:00:00`);
+  d.setDate(d.getDate() + n);
+  return localDay(d);
+}
+function daysBetween(from, to) {
+  return Math.round((new Date(`${to}T12:00:00`) - new Date(`${from}T12:00:00`)) / 864e5);
+}
+const num = (v, digits = 0) => v.toLocaleString("sk-SK", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const shortDate = (day) => { const [, m, d] = day.split("-"); return `${+d}. ${+m}.`; };
+const fullDate = (day) => new Date(`${day}T12:00:00`).toLocaleDateString("sk-SK", { weekday: "short", day: "numeric", month: "numeric", year: "numeric" });
+const clock = (min) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+const hours = (seconds) => `${Math.floor(seconds / 3600)} h ${String(Math.round(seconds / 60) % 60).padStart(2, "0")} min`;
+const duration = (activity) => activity.moving_time || activity.elapsed_time;
+const mean = (values) => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+
+async function api(path) {
+  const res = await fetch(API + path, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (res.status === 401) { logout(); throw new Error("unauthorized"); }
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  return res.json();
+}
+
+/* Data */
+async function loadTrend() {
+  const from = addDays(localDay(new Date()), -(state.range * 2 - 1));
+  const list = (collection) =>
+    api(`/api/${collection}?gte.day=${from}&sort=day&order=asc&limit=1000&omit=samples`).then((r) => r.items.map((d) => d.data));
+  const [hr, hrv, strava] = await Promise.all([
+    list("apple_heart_rate"),
+    list("apple_heart_rate_variability"),
+    api(`/api/strava_activities?gte.start_date_local=${from}&sort=start_date&order=desc&limit=1000&omit=map`).then((r) => r.items.map((d) => d.data)),
+  ]);
+  state.trend = { hr, hrv, strava };
+}
+async function loadDay() {
+  const doc = await api(`/api/apple_heart_rate/${state.day}`);
+  state.dayDoc = doc ? doc.data : null;
+}
+function periods() {
+  const today = localDay(new Date());
+  const from = addDays(today, -(state.range - 1));
+  return { today, from, prevFrom: addDays(from, -state.range) };
+}
+function groupOf(activity) {
+  return GROUPS.find((g) => g.sports.includes(activity.sport_type)) ?? GROUPS[3];
+}
+
+// Samples come irregularly, much denser during a workout, so each 5 minute window counts once.
+function dayBuckets(doc) {
+  const buckets = new Map();
+  for (const [time, [avg, min, max]] of Object.entries(doc?.samples ?? {})) {
+    const date = new Date(time);
+    if (localDay(date) !== state.day) continue;
+    const minute = Math.floor((date.getHours() * 60 + date.getMinutes()) / 5) * 5;
+    const b = buckets.get(minute) ?? { minute, values: [], lo: Infinity, hi: -Infinity };
+    b.values.push(avg);
+    b.lo = Math.min(b.lo, min);
+    b.hi = Math.max(b.hi, max);
+    buckets.set(minute, b);
+  }
+  return [...buckets.values()].sort((a, b) => a.minute - b.minute).map((b) => ({ ...b, avg: mean(b.values) }));
+}
+
+/* Tooltip */
+const tip = document.getElementById("tip");
+function showTip(event, rect, title, rows) {
+  tip.replaceChildren(h("div", { class: "title", text: title }),
+    ...rows.map((r) => h("div", { class: "row" },
+      r.color && Object.assign(h("i"), { style: `background:${r.color}` }),
+      h("b", { text: r.value }), r.label && h("span", { text: r.label }))));
+  tip.hidden = false;
+  const box = tip.getBoundingClientRect();
+  const x = event?.clientX ?? rect.left + rect.width / 2;
+  const y = event?.clientY ?? rect.top;
+  tip.style.left = `${Math.max(8, Math.min(x + 14, innerWidth - box.width - 8))}px`;
+  tip.style.top = `${Math.max(8, y - box.height - 12)}px`;
+}
+const hideTip = () => { tip.hidden = true; };
+
+/* Charts */
+function niceTicks(lo, hi, count = 4) {
+  const span = Math.max(hi - lo, 1);
+  const raw = span / count;
+  const mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 5, 10].map((m) => m * mag).find((m) => m >= raw);
+  const ticks = [];
+  for (let v = Math.floor(lo / step) * step; v < hi + step; v += step) ticks.push(+v.toFixed(6));
+  return ticks;
+}
+function frame(el, height, ticks, label) {
+  const width = Math.max(el.clientWidth, 260);
+  const m = { top: 10, right: 12, bottom: 24, left: 34 };
+  const svg = s("svg", { viewBox: `0 0 ${width} ${height}`, height, role: "img", "aria-label": label, tabindex: 0 });
+  const plot = { x: m.left, y: m.top, w: width - m.left - m.right, h: height - m.top - m.bottom };
+  const y = (v) => plot.y + plot.h - ((v - ticks[0]) / (ticks[ticks.length - 1] - ticks[0])) * plot.h;
+  ticks.forEach((t, i) => {
+    svg.append(s("line", { x1: plot.x, x2: plot.x + plot.w, y1: y(t), y2: y(t), stroke: i ? "var(--grid)" : "var(--axis)" }));
+    svg.append(s("text", { x: plot.x - 7, y: y(t) + 4, "text-anchor": "end", text: num(t) }));
+  });
+  return { svg, plot, y };
+}
+function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, regions = [], gap, label, read }) {
+  const all = series.flatMap((sr) => sr.values).concat(band ? [...band.lo, ...band.hi] : []).filter((v) => v != null);
+  const pad = (Math.max(...all) - Math.min(...all)) * 0.08 || 2;
+  const ticks = niceTicks(Math.min(...all) - pad, Math.max(...all) + pad);
+  const { svg, plot, y } = frame(el, height, ticks, label);
+  const px = (v) => plot.x + ((v - xMin) / (xMax - xMin || 1)) * plot.w;
+
+  for (const r of regions) {
+    const x1 = px(Math.max(r.from, xMin)), x2 = px(Math.min(r.to, xMax));
+    svg.append(s("rect", { x: x1, y: plot.y, width: Math.max(x2 - x1, 2), height: plot.h, fill: "var(--wash)" }));
+    if (x2 - x1 > 34) svg.append(s("text", { class: "region", x: x1 + 4, y: plot.y + 12, text: r.label }));
+  }
+  for (const t of xTicks) svg.append(s("text", { x: px(t.v), y: plot.y + plot.h + 17, "text-anchor": t.anchor ?? "middle", text: t.label }));
+
+  const segments = (lo, hi = lo) => {
+    const parts = [[]];
+    x.forEach((v, i) => {
+      if (lo[i] == null) { parts.push([]); return; }
+      const last = parts[parts.length - 1];
+      if (last.length && gap && v - x[last[last.length - 1]] > gap) parts.push([]);
+      parts[parts.length - 1].push(i);
+    });
+    return parts.filter((p) => p.length);
+  };
+  if (band) {
+    for (const part of segments(band.lo)) {
+      const top = part.map((i) => `${px(x[i])},${y(band.hi[i])}`);
+      const bottom = part.slice().reverse().map((i) => `${px(x[i])},${y(band.lo[i])}`);
+      svg.append(s("polygon", { points: [...top, ...bottom].join(" "), fill: band.color, opacity: 0.14 }));
+    }
+  }
+  for (const sr of series) {
+    if (sr.dots) {
+      x.forEach((v, i) => sr.values[i] != null && svg.append(
+        s("circle", { cx: px(v), cy: y(sr.values[i]), r: 4, fill: sr.color, opacity: sr.opacity ?? 1, stroke: "var(--surface)", "stroke-width": 2 })));
+    } else {
+      for (const part of segments(sr.values)) {
+        svg.append(s("polyline", { points: part.map((i) => `${px(x[i])},${y(sr.values[i])}`).join(" "), fill: "none",
+          stroke: sr.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+      }
+    }
+  }
+
+  const cross = s("line", { y1: plot.y, y2: plot.y + plot.h, stroke: "var(--axis)", visibility: "hidden" });
+  const marker = s("circle", { r: 4.5, fill: series[series.length - 1].color, stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" });
+  svg.append(cross, marker);
+  let current = 0;
+  const show = (i, event) => {
+    current = i;
+    const cx = px(x[i]);
+    const v = series[series.length - 1].values[i];
+    cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("visibility", "visible");
+    marker.setAttribute("cx", cx);
+    if (v != null) { marker.setAttribute("cy", y(v)); marker.setAttribute("visibility", "visible"); } else marker.setAttribute("visibility", "hidden");
+    const { title, rows } = read(i);
+    const box = svg.getBoundingClientRect();
+    showTip(event, { left: box.left + cx * (box.width / svg.viewBox.baseVal.width), top: box.top + 30, width: 0 }, title, rows);
+  };
+  const clear = () => { cross.setAttribute("visibility", "hidden"); marker.setAttribute("visibility", "hidden"); hideTip(); };
+  svg.addEventListener("pointermove", (event) => {
+    const box = svg.getBoundingClientRect();
+    const at = xMin + (((event.clientX - box.left) * (svg.viewBox.baseVal.width / box.width) - plot.x) / plot.w) * (xMax - xMin);
+    let best = 0;
+    x.forEach((v, i) => { if (Math.abs(v - at) < Math.abs(x[best] - at)) best = i; });
+    show(best, event);
+  });
+  svg.addEventListener("pointerleave", clear);
+  svg.addEventListener("blur", clear);
+  svg.addEventListener("focus", () => show(current));
+  svg.addEventListener("keydown", (event) => {
+    const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+    if (!step) return;
+    event.preventDefault();
+    show(Math.max(0, Math.min(x.length - 1, current + step)));
+  });
+  el.replaceChildren(svg);
+}
+function barChart(el, { height = 230, bars, label }) {
+  const maxTotal = Math.max(...bars.map((b) => b.total), 1);
+  const ticks = niceTicks(0, maxTotal);
+  const { svg, plot, y } = frame(el, height, ticks, label);
+  svg.removeAttribute("tabindex");
+  const slot = plot.w / bars.length;
+  const width = Math.min(24, Math.max(slot - 2, 2));
+  const every = Math.ceil(bars.length / Math.floor(plot.w / 52));
+  bars.forEach((bar, i) => {
+    const left = plot.x + i * slot + (slot - width) / 2;
+    const group = s("g", { tabindex: bar.total ? 0 : -1, role: "img", "aria-label": `${bar.title}: ${num(bar.total, 1)} h` });
+    let base = y(0);
+    const parts = bar.parts.filter((p) => p.value > 0);
+    parts.forEach((p, n) => {
+      const barHeight = Math.max(y(0) - y(p.value) - (n ? 2 : 0), 1);
+      const top = base - barHeight - (n ? 2 : 0);
+      const r = n === parts.length - 1 ? Math.min(4, barHeight, width / 2) : 0;
+      const bottom = top + barHeight;
+      group.append(s("path", { fill: p.color, d:
+        `M${left},${bottom}V${top + r}Q${left},${top} ${left + r},${top}H${left + width - r}Q${left + width},${top} ${left + width},${top + r}V${bottom}Z` }));
+      base = top;
+    });
+    group.append(s("rect", { x: plot.x + i * slot, y: plot.y, width: slot, height: plot.h, fill: "transparent" }));
+    const rows = () => [...parts].reverse().map((p) => ({ color: p.color, value: `${num(p.value, 1)} h`, label: p.label }));
+    if (bar.total) {
+      group.addEventListener("pointermove", (event) => showTip(event, null, bar.title, rows()));
+      group.addEventListener("pointerleave", hideTip);
+      group.addEventListener("focus", () => showTip(null, group.getBoundingClientRect(), bar.title, rows()));
+      group.addEventListener("blur", hideTip);
+    }
+    svg.append(group);
+    if (i % every === 0) svg.append(s("text", { x: left + width / 2, y: plot.y + plot.h + 17, "text-anchor": "middle", text: bar.tick }));
+  });
+  el.replaceChildren(svg);
+}
+function legend(items) {
+  return h("div", { class: "legend" }, ...items.map((item) => h("span", {},
+    Object.assign(h("i", { class: item.kind ?? "" }), { style: `background:${item.color};opacity:${item.opacity ?? 1}` }), item.label)));
+}
+function table(columns, rows) {
+  const align = (c) => (c.num ? { class: "num" } : {});
+  return h("details", {}, h("summary", { text: "Zobraziť tabuľku" }), h("div", { class: "scroll" }, h("table", {},
+    h("thead", {}, h("tr", {}, ...columns.map((c) => h("th", { ...align(c), text: c.label })))),
+    h("tbody", {}, ...rows.map((row) => h("tr", {}, ...row.map((v, i) => h("td", { ...align(columns[i]), text: v }))))))));
+}
+
+/* Views */
+function tiles() {
+  const { from, prevFrom } = periods();
+  const { hr, hrv, strava } = state.trend;
+  const cur = (list, key) => list.filter((d) => d[key].slice(0, 10) >= from);
+  const prev = (list, key) => list.filter((d) => d[key].slice(0, 10) >= prevFrom && d[key].slice(0, 10) < from);
+  // A previous period with only a few days of history would make a misleading comparison.
+  const baseline = (list, key) => { const days = prev(list, "day"); return days.length >= state.range / 2 ? mean(days.map((d) => d[key])) : null; };
+  const hrvNow = mean(cur(hrv, "day").map((d) => d.avg)), hrvPrev = baseline(hrv, "avg");
+  const lowNow = mean(cur(hr, "day").map((d) => d.min)), lowPrev = baseline(hr, "min");
+  const workouts = cur(strava, "start_date_local"), workoutsPrev = prev(strava, "start_date_local");
+  const sum = (list, key) => list.reduce((a, b) => a + (b[key] || 0), 0);
+  const change = (now, before, digits, unit) => {
+    if (now == null || before == null) return "bez porovnania";
+    const diff = now - before;
+    const sign = diff > 0 ? "+" : diff < 0 ? "−" : "±";
+    return `${sign}${num(Math.abs(diff), digits)}${unit} oproti minulému obdobiu`;
+  };
+  const tile = (label, value, unit, delta, hero) => h("div", { class: `tile${hero ? " hero" : ""}` },
+    h("div", { class: "label", text: label }),
+    h("div", { class: "value" }, value, unit && h("small", { text: unit })),
+    h("div", { class: "delta", text: delta }));
+  const seconds = workouts.reduce((total, a) => total + duration(a), 0);
+  const secondsPrev = workoutsPrev.reduce((total, a) => total + duration(a), 0);
+  return h("div", { class: "tiles" },
+    tile("Priemerné HRV", hrvNow == null ? "–" : num(hrvNow, 1), "ms", change(hrvNow, hrvPrev, 1, " ms"), true),
+    tile("Najnižší tep dňa, priemer", lowNow == null ? "–" : num(lowNow), "bpm", change(lowNow, lowPrev, 1, " bpm")),
+    tile("Tréningy", String(workouts.length), "", change(workouts.length, workoutsPrev.length, 0, "")),
+    tile("Čas tréningov", num(seconds / 3600, 1), "h", change(seconds / 3600, secondsPrev / 3600, 1, " h")),
+    tile("Vzdialenosť", num(sum(workouts, "distance") / 1000), "km", change(sum(workouts, "distance") / 1000, sum(workoutsPrev, "distance") / 1000, 0, " km")));
+}
+function dayCard() {
+  const card = h("section", { class: "card" });
+  const buckets = dayBuckets(state.dayDoc);
+  const head = h("div", {},
+    h("h2", { text: `Tep cez deň, ${fullDate(state.day)}` }));
+  card.append(h("div", { class: "card-head" }, head,
+    buckets.length ? legend([{ kind: "line", color: "var(--hr)", label: "5-min. priemer" }, { color: "var(--hr)", label: "rozsah min–max", opacity: 0.25 }]) : null));
+  if (!buckets.length) { card.append(h("div", { class: "empty", text: "Pre tento deň nie sú dáta o tepe." })); return card; }
+
+  const avg = mean(buckets.map((b) => b.avg));
+  const lo = Math.min(...buckets.map((b) => b.lo)), hi = Math.max(...buckets.map((b) => b.hi));
+  head.append(h("p", { class: "note", text: `Priemer ${num(avg)} bpm, rozsah ${lo}–${hi} bpm` }));
+
+  const regions = state.trend.strava.filter((a) => a.start_date_local.slice(0, 10) === state.day).map((a) => {
+    const start = new Date(a.start_date);
+    const from = start.getHours() * 60 + start.getMinutes();
+    return { from, to: from + a.elapsed_time / 60, label: SPORT_NAMES[a.sport_type] ?? a.sport_type, name: a.name };
+  });
+  const chart = h("div", { class: "chart" });
+  card.append(chart);
+  chart.draw = () => lineChart(chart, {
+    x: buckets.map((b) => b.minute), xMin: 0, xMax: 1440, gap: 30, regions,
+    xTicks: [0, 6, 12, 18, 24].map((t) => ({ v: t * 60, label: `${t}:00`, anchor: t === 0 ? "start" : t === 24 ? "end" : "middle" })),
+    series: [{ color: "var(--hr)", values: buckets.map((b) => b.avg) }],
+    band: { color: "var(--hr)", lo: buckets.map((b) => b.lo), hi: buckets.map((b) => b.hi) },
+    label: `Tep počas dňa, rozsah ${lo} až ${hi} úderov za minútu`,
+    read: (i) => {
+      const b = buckets[i];
+      const r = regions.find((w) => b.minute >= w.from - 5 && b.minute <= w.to);
+      return { title: r ? `${clock(b.minute)} · ${r.name}` : clock(b.minute),
+        rows: [{ color: "var(--hr)", value: `${num(b.avg)} bpm`, label: `${b.lo}–${b.hi}` }] };
+    },
+  });
+  const hourly = Array.from({ length: 24 }, (_, hour) => buckets.filter((b) => Math.floor(b.minute / 60) === hour))
+    .map((list, hour) => list.length ? [`${hour}:00`, num(mean(list.map((b) => b.avg))), String(Math.min(...list.map((b) => b.lo))), String(Math.max(...list.map((b) => b.hi)))] : null)
+    .filter(Boolean);
+  card.append(table([{ label: "Hodina" }, { label: "Priemer", num: true }, { label: "Min", num: true }, { label: "Max", num: true }], hourly));
+  return card;
+}
+function trendCard(title, note, list, build) {
+  const card = h("section", { class: "card" });
+  card.append(h("div", { class: "card-head" }, h("div", {}, h("h2", { text: title }), h("p", { class: "note", text: note })), build.legend));
+  if (!list.length) { card.append(h("div", { class: "empty", text: "V tomto období nie sú dáta." })); return card; }
+  const chart = h("div", { class: "chart" });
+  card.append(chart);
+  chart.draw = () => build.draw(chart);
+  card.append(build.table());
+  return card;
+}
+function dateAxis(from, to) {
+  const span = daysBetween(from, to);
+  const count = 5;
+  return Array.from({ length: count }, (_, i) => {
+    const offset = Math.round((span * i) / (count - 1));
+    return { v: offset, label: shortDate(addDays(from, offset)), anchor: i === 0 ? "start" : i === count - 1 ? "end" : "middle" };
+  });
+}
+function hrvCard() {
+  const { from, today } = periods();
+  const all = state.trend.hrv;
+  const list = all.filter((d) => d.day >= from);
+  const rolling = (day) => {
+    const lower = addDays(day, -6);
+    return mean(all.filter((d) => d.day >= lower && d.day <= day).map((d) => d.avg));
+  };
+  const values = list.map((d) => d.avg), smooth = list.map((d) => rolling(d.day));
+  const start = list[0]?.day ?? from;
+  const x = list.map((d) => daysBetween(start, d.day));
+  return trendCard("HRV", "Denný priemer SDNN z Apple Watch", list, {
+    legend: legend([{ kind: "dot", color: "var(--hrv)", label: "deň" }, { kind: "line", color: "var(--hrv)", label: "7-dňový priemer" }]),
+    draw: (el) => lineChart(el, {
+      x, xMin: 0, xMax: daysBetween(start, today), xTicks: dateAxis(start, today),
+      series: [{ color: "var(--hrv)", values, dots: true, opacity: 0.4 }, { color: "var(--hrv)", values: smooth }],
+      label: "Denné HRV a sedemdňový priemer",
+      read: (i) => ({ title: fullDate(list[i].day), rows: [
+        { color: "var(--hrv)", value: `${num(values[i], 1)} ms`, label: "deň" },
+        { color: "var(--hrv)", value: `${num(smooth[i], 1)} ms`, label: "7-dňový priemer" }] }),
+    }),
+    table: () => table([{ label: "Deň" }, { label: "HRV (ms)", num: true }, { label: "7-dňový priemer", num: true }],
+      list.slice().reverse().map((d, i, rev) => [fullDate(d.day), num(d.avg, 1), num(smooth[rev.length - 1 - i], 1)])),
+  });
+}
+function lowHrCard() {
+  const { from, today } = periods();
+  const list = state.trend.hr.filter((d) => d.day >= from);
+  const start = list[0]?.day ?? from;
+  const x = list.map((d) => daysBetween(start, d.day));
+  return trendCard("Najnižší tep dňa", "Najnižšia nameraná hodnota, približne pokojový tep", list, {
+    draw: (el) => lineChart(el, {
+      x, xMin: 0, xMax: daysBetween(start, today), xTicks: dateAxis(start, today),
+      series: [{ color: "var(--hr)", values: list.map((d) => d.min) }],
+      label: "Najnižší tep za každý deň",
+      read: (i) => ({ title: fullDate(list[i].day), rows: [
+        { color: "var(--hr)", value: `${list[i].min} bpm`, label: "najnižší" },
+        { value: `${list[i].max} bpm`, label: "najvyšší" }] }),
+    }),
+    table: () => table([{ label: "Deň" }, { label: "Najnižší (bpm)", num: true }, { label: "Najvyšší (bpm)", num: true }],
+      list.slice().reverse().map((d) => [fullDate(d.day), String(d.min), String(d.max)])),
+  });
+}
+function loadCard() {
+  const { from, today } = periods();
+  const activities = state.trend.strava.filter((a) => a.start_date_local.slice(0, 10) >= from);
+  const weekly = state.range > 30;
+  const keyOf = (day) => {
+    if (!weekly) return day;
+    const weekday = (new Date(`${day}T12:00:00`).getDay() + 6) % 7;
+    return addDays(day, -weekday);
+  };
+  const bars = [];
+  for (let day = keyOf(from); day <= today; day = addDays(day, weekly ? 7 : 1)) {
+    const inBar = activities.filter((a) => keyOf(a.start_date_local.slice(0, 10)) === day);
+    const parts = GROUPS.map((g) => ({
+      color: `var(--${g.id})`, label: g.label,
+      value: inBar.filter((a) => groupOf(a) === g).reduce((sum, a) => sum + duration(a) / 3600, 0),
+    }));
+    bars.push({ tick: shortDate(day), title: weekly ? `Týždeň od ${shortDate(day)}` : fullDate(day), parts, total: parts.reduce((sum, p) => sum + p.value, 0) });
+  }
+  return trendCard("Tréningový objem", weekly ? "Hodiny za týždeň podľa športu" : "Hodiny za deň podľa športu", activities, {
+    legend: legend(GROUPS.map((g) => ({ color: `var(--${g.id})`, label: g.label }))),
+    draw: (el) => barChart(el, { bars, label: "Hodiny tréningu podľa športu" }),
+    table: () => table([{ label: weekly ? "Týždeň" : "Deň" }, ...GROUPS.map((g) => ({ label: `${g.label} (h)`, num: true }))],
+      bars.filter((b) => b.total).reverse().map((b) => [b.title, ...b.parts.map((p) => num(p.value, 1))])),
+  });
+}
+function workoutsCard() {
+  const { from } = periods();
+  const activities = state.trend.strava.filter((a) => a.start_date_local.slice(0, 10) >= from).slice(0, 12);
+  const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Posledné tréningy" })));
+  if (!activities.length) { card.append(h("div", { class: "empty", text: "V tomto období nie sú tréningy." })); return card; }
+  card.append(h("div", { class: "scroll" }, h("table", {},
+    h("thead", {}, h("tr", {}, ...[["Deň"], ["Šport"], ["Názov", "name"], ["Čas", "num"], ["Vzdialenosť", "num"], ["Tep", "num"]].map(([label, cls]) => h("th", { ...(cls ? { class: cls } : {}), text: label })))),
+    h("tbody", {}, ...activities.map((a) => {
+      const day = a.start_date_local.slice(0, 10);
+      const cells = [
+        [h("button", { class: "link", text: shortDate(day), title: "Zobraziť tep v tento deň", onclick: () => selectDay(day) })],
+        SPORT_NAMES[a.sport_type] ?? a.sport_type,
+        a.name,
+      ];
+      return h("tr", {},
+        h("td", {}, ...cells[0]), h("td", { text: cells[1] }), h("td", { class: "name", text: cells[2] }),
+        h("td", { class: "num", text: hours(duration(a)) }),
+        h("td", { class: "num", text: a.distance ? `${num(a.distance / 1000, 1)} km` : "–" }),
+        h("td", { class: "num", text: a.average_heartrate ? num(a.average_heartrate) : "–" }));
+    })))));
+  return card;
+}
+
+/* Shell */
+const app = document.getElementById("app");
+function drawCharts() {
+  hideTip();
+  app.querySelectorAll(".chart").forEach((el) => el.draw?.());
+}
+function filters() {
+  const { today } = periods();
+  return h("div", { class: "filters" },
+    h("div", { class: "seg", role: "group", "aria-label": "Obdobie" }, ...RANGES.map(([days, label]) =>
+      h("button", { "aria-pressed": String(state.range === days), text: label, onclick: () => selectRange(days) }))),
+    h("div", { class: "daypick" },
+      h("button", { "aria-label": "Predchádzajúci deň", text: "‹", onclick: () => selectDay(addDays(state.day, -1)) }),
+      h("input", { type: "date", value: state.day, max: today, "aria-label": "Deň pre graf tepu", onchange: (e) => e.target.value && selectDay(e.target.value) }),
+      state.day < today ? h("button", { "aria-label": "Nasledujúci deň", text: "›", onclick: () => selectDay(addDays(state.day, 1)) }) : null));
+}
+function render() {
+  const cards = [dayCard(), h("div", { class: "grid2" }, hrvCard(), lowHrCard()), loadCard(), workoutsCard()];
+  app.replaceChildren(
+    h("header", {}, h("h1", { text: "Zdravie" }), h("button", { class: "link", text: "Odhlásiť", onclick: logout })),
+    filters(), tiles(), ...cards);
+  drawCharts();
+}
+function showError() {
+  app.classList.remove("loading");
+  app.replaceChildren(h("div", { class: "card login" }, h("h1", { text: "Dáta sa nepodarilo načítať" }),
+    h("p", { class: "note", text: "Server momentálne neodpovedá. Skús to o chvíľu znova." }),
+    h("form", { onsubmit: (e) => { e.preventDefault(); start(); } }, h("button", { text: "Skúsiť znova" }))));
+}
+async function refresh(work) {
+  app.classList.add("loading");
+  try {
+    await work();
+    render();
+  } catch (error) {
+    if (error.message !== "unauthorized") showError();
+  } finally {
+    app.classList.remove("loading");
+  }
+}
+function selectRange(days) {
+  state.range = days;
+  refresh(loadTrend);
+}
+function selectDay(day) {
+  state.day = day;
+  refresh(loadDay);
+}
+const start = () => refresh(() => Promise.all([loadTrend(), loadDay()]));
+
+function logout() {
+  apiKey = "";
+  saveKey("");
+  login();
+}
+function login(message) {
+  const input = h("input", { type: "password", required: "", autocomplete: "current-password", placeholder: "API kľúč", "aria-label": "API kľúč" });
+  const error = h("p", { class: "error", text: message ?? "" });
+  const form = h("form", { onsubmit: async (event) => {
+    event.preventDefault();
+    apiKey = input.value.trim();
+    const res = await fetch(`${API}/api`, { headers: { Authorization: `Bearer ${apiKey}` } }).catch(() => null);
+    if (res?.ok) { saveKey(apiKey); start(); return; }
+    error.textContent = res?.status === 401 ? "Tento kľúč nie je správny." : "Server momentálne neodpovedá.";
+  } }, input, h("button", { text: "Prihlásiť" }), error);
+  app.replaceChildren(h("div", { class: "card login" }, h("h1", { text: "Zdravie" }),
+    h("p", { class: "note", text: "Zadaj API kľúč. Uloží sa len v tomto prehliadači." }), form));
+  input.focus();
+}
+
+let resizeTimer;
+addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawCharts, 120); });
+apiKey ? start() : login();
+</script>
+</body>
+</html>
