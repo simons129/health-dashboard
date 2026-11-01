@@ -216,6 +216,7 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .alert .title { font-weight: 620; font-size: 13.5px; color: inherit; }
 .alert .sub { color: var(--ink-2); font-size: 12.5px; }
 .alert .link { flex: none; font-size: 12.5px; min-height: 24px; }
+.summary { margin: 6px 0 0; font-size: 15px; line-height: 1.5; }
 .write-error { color: var(--ink); font-size: 13px; margin-top: 6px; }
 .visit { display: block; padding: 10px 0; border-top: 1px solid var(--grid); color: inherit; text-decoration: none; }
 .visit .title { font-weight: 600; font-size: 13.5px; }
@@ -385,7 +386,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -469,7 +470,7 @@ async function loadDay() {
 const lastPerDay = (rows) => [...new Map(rows.map((r) => [r.day, r])).values()];
 async function loadBody() {
   const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
-  const [totals, rest, weight, vo2, fat, lean, swims, plans] = await Promise.all([
+  const [totals, rest, weight, vo2, fat, lean, swims, plans, summary] = await Promise.all([
     items("/api/apple_daily_totals?sort=date&order=desc&limit=1000"),
     items("/api/apple_resting_heart_rate?sort=day&order=asc&limit=1000"),
     items("/api/apple_weight?sort=day&order=asc&limit=1000"),
@@ -478,7 +479,9 @@ async function loadBody() {
     items("/api/apple_lean_body_mass?sort=day&order=desc&limit=1"),
     api("/api/strava_swims?sort=start_date&order=desc&limit=1000").then((r) => r.items),
     api("/api/plans?sort=day&order=asc&limit=1000").then((r) => r.items),
+    api(`/api/daily_summary/${localDay(new Date())}`),
   ]);
+  state.summary = summary?.data.text ?? null;
   state.plans = plans.map((doc) => ({ id: doc.id, ...doc.data }));
   state.swims = new Map(swims.map((doc) => [doc.id, swimSummary(doc.data)]));
   state.totals = new Map(totals.map((t) => [t.date, t]));
@@ -1537,6 +1540,10 @@ function hideAlert(id) {
   try { localStorage.setItem(ALERT_HIDDEN_KEY, JSON.stringify(hidden)); } catch {}
   render();
 }
+function summaryCard() {
+  if (!state.summary) return null;
+  return h("section", { class: "card" }, h("h2", { text: "Dnes" }), h("p", { class: "summary", text: state.summary }));
+}
 function alertsCard() {
   const today = localDay(new Date());
   const hidden = hiddenAlerts();
@@ -2311,7 +2318,7 @@ function render() {
         measureCard("VO2 Max", "Kondícia podľa Apple Watch", state.vo2, "vo2_ml_per_min_per_kg", 1, "ml/kg/min", "var(--strength)")),
       h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")),
       loadCard(), workoutsCard()];
-    app.replaceChildren(head, tabs(page), ...[alertsCard(), weekCard()].filter(Boolean), filters(), ...cards.slice(0, 2), tiles(), ...cards.slice(2));
+    app.replaceChildren(head, tabs(page), ...[summaryCard(), alertsCard(), weekCard()].filter(Boolean), filters(), ...cards.slice(0, 2), tiles(), ...cards.slice(2));
   }
   drawCharts();
 }
