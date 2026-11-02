@@ -850,6 +850,17 @@ function table(columns, rows) {
 function statusBadge([tone, icon, verdict]) {
   return h("div", { class: `status ${tone}` }, Object.assign(h("i", { text: icon }), { style: `background:var(--${tone})` }), verdict);
 }
+const PLAN_REGIONS = { upper: "Horná časť", lower: "Spodná časť", full: "Celé telo" };
+// The calendar decides what comes next. Readiness only picks a part when nothing is planned.
+function plannedStrength() {
+  const today = localDay(new Date());
+  return state.plans.find((plan) => plan.sport === "sila" && plan.day >= today && !planDone(plan)) ?? null;
+}
+function plannedScore(plan) {
+  const parts = state.strength.filter((region) => plan.type === "full" || region.id === plan.type);
+  return Math.min(...parts.map((region) => region.score));
+}
+const dayLabel = (day) => new Date(`${day}T12:00:00`).toLocaleDateString("sk-SK", { weekday: "short", day: "numeric", month: "numeric" });
 function bestRegion() {
   return state.strength.reduce((a, b) => (b.score > a.score || (b.score === a.score && b.sessions < a.sessions) ? b : a));
 }
@@ -893,12 +904,21 @@ function exerciseTarget(entry, hold) {
   return { previous, next: `${working.length} × ${hold ? lowest : Math.min(lowest + 1, ceiling)} × ${kgText(last.top.kg)}${side}`, increase: 0 };
 }
 function planCard(index) {
+  const today = localDay(new Date());
   const best = bestRegion();
-  const trainedToday = state.workouts[0]?.day === localDay(new Date());
-  const hold = recoveryIsLow() || best.score < 90 || trainedToday;
-  const template = state.workouts.find((w) => w.region === best.label) ?? state.workouts.find((w) => w.region === "Celé telo") ?? state.workouts[0];
-  const title = trainedToday ? `Ďalší tréning: ${best.label}` : best.score >= 90 ? `Plán na dnes: ${best.label}`
-    : best.score >= 60 ? `Ľahší tréning: ${best.label}` : `Po oddychu: ${best.label}`;
+  const planned = plannedStrength();
+  const label = planned ? PLAN_REGIONS[planned.type] : best.label;
+  const plannedToday = planned?.day === today;
+  const trainedToday = state.workouts[0]?.day === today;
+  const score = planned ? plannedScore(planned) : best.score;
+  // Readiness and recovery of today say nothing about a workout planned for later.
+  const hold = planned && !plannedToday ? false : recoveryIsLow() || score < 90 || (trainedToday && !planned);
+  const template = state.workouts.find((w) => w.region === label) ?? state.workouts.find((w) => w.region === "Celé telo") ?? state.workouts[0];
+  const title = plannedToday ? `Plán na dnes: ${label}`
+    : planned ? `Ďalší tréning, ${dayLabel(planned.day)}: ${label}`
+    : trainedToday ? `Ďalší tréning: ${label}`
+    : score >= 90 ? `Plán na dnes: ${label}`
+    : score >= 60 ? `Ľahší tréning: ${label}` : `Po oddychu: ${label}`;
   const note = hold ? "Váhy držíme, dnes sa netlačí na progres." : "Keď dáš všetky série naplno, ďalšie zvýšenie príde samo.";
   const card = h("section", { class: "card" }, h("h2", { text: title }),
     h("p", { class: "note", text: `${note} Podľa tréningu z ${shortDate(template.day)}` }));
@@ -951,18 +971,29 @@ function muscleCard() {
 }
 function strengthCard(withLink = true) {
   const regions = state.strength;
+  const today = localDay(new Date());
   const best = bestRegion();
   const lowRecovery = recoveryIsLow();
-  const verdict = best.score >= 90 ? ["good", "✓", `Dnes: ${best.label}`]
+  const planned = plannedStrength();
+  const plannedToday = planned?.day === today;
+  const trainedToday = state.workouts[0]?.day === today;
+  const shown = plannedToday ? plannedScore(planned) : best.score;
+  const verdict = plannedToday
+    ? [shown >= 90 ? "good" : shown >= 60 ? "warning" : "critical", shown >= 90 ? "✓" : shown >= 60 ? "!" : "×", `Dnes: ${PLAN_REGIONS[planned.type]}`]
+    : trainedToday ? ["good", "✓", "Dnes odcvičené"]
+    : planned ? ["good", "✓", "Dnes bez silového tréningu"]
+    : best.score >= 90 ? ["good", "✓", `Dnes: ${best.label}`]
     : best.score >= 60 ? ["warning", "!", `Ľahšie: ${best.label}`]
     : ["critical", "×", "Daj voľno alebo techniku"];
+  const detail = lowRecovery && !trainedToday ? "Recovery je dnes nízke, zváž menší objem."
+    : planned && !plannedToday ? `Ďalší podľa kalendára: ${dayLabel(planned.day)}, ${PLAN_REGIONS[planned.type].toLowerCase()}`
+    : `Za 7 dní: ${regions.map((r) => `${r.label.toLowerCase()} ${r.sessions}×`).join(", ")}`;
   const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("div", {},
     h("h2", { text: "Silový tréning" }),
     h("p", { class: "note", text: "Podľa času od zaťaženia partie a počtu sérií" }))));
   card.append(h("div", { class: "readiness" },
-    h("div", { class: "score", text: String(best.score) }),
-    h("div", {}, statusBadge(verdict),
-      h("div", { class: "parts", text: lowRecovery ? "Recovery je dnes nízke, zváž menší objem." : `Za 7 dní: ${regions.map((r) => `${r.label.toLowerCase()} ${r.sessions}×`).join(", ")}` }))));
+    h("div", { class: "score", text: String(shown) }),
+    h("div", {}, statusBadge(verdict), h("div", { class: "parts", text: detail }))));
   for (const region of regions) {
     card.append(h("div", { class: "region" },
       h("div", { class: "region-head" }, h("span", { text: region.label }),
