@@ -292,6 +292,17 @@ h2 { font-size: 16px; }
 .card.has-info .card-head { padding-right: 26px; }
 .hero { color: #fff; background: linear-gradient(135deg, #1e2952, #0f766e); --ring-good: #4ade80; --ring-warning: #fbbf24; --ring-critical: #f87171; --ring-track: rgba(255,255,255,.18); }
 .hero .summary { margin: 14px 0 0; font-size: 15px; line-height: 1.45; }
+.hero .summary.stale { opacity: .65; }
+.hero-meta { display: flex; align-items: center; gap: 6px; min-height: 30px; margin-top: 4px; font-size: 12.5px; opacity: .8; }
+.hero-meta + .hero-meta { margin-top: 0; min-height: 0; }
+.hero .write-error { color: #fff; }
+.refresh { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; min-height: 0; padding: 4px; border: 0; border-radius: 50%; background: none; color: #fff; }
+.refresh:hover { background: rgba(255,255,255,.14); }
+.refresh svg { width: 17px; height: 17px; }
+.refresh.spinning svg { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .refresh.spinning svg { animation: none; } }
+.hero-create { margin-top: 8px; border: 0; background: rgba(255,255,255,.16); color: #fff; font-weight: 600; }
 .hero-plan { display: block; margin-top: 12px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.14); color: #fff; font-weight: 600; text-decoration: none; }
 .rings { display: flex; justify-content: space-around; gap: 6px; }
 .ring { flex: 1; min-width: 0; max-width: 130px; text-align: center; color: inherit; text-decoration: none; }
@@ -461,7 +472,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleSync: null, ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -545,7 +556,7 @@ async function loadDay() {
 const lastPerDay = (rows) => [...new Map(rows.map((r) => [r.day, r])).values()];
 async function loadBody() {
   const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
-  const [totals, rest, weight, vo2, fat, lean, swims, plans, summary, aiDocs] = await Promise.all([
+  const [totals, rest, weight, vo2, fat, lean, swims, plans, summary, aiDocs, heart] = await Promise.all([
     items("/api/apple_daily_totals?sort=date&order=desc&limit=1000"),
     items("/api/apple_resting_heart_rate?sort=day&order=asc&limit=1000"),
     items("/api/apple_weight?sort=day&order=asc&limit=1000"),
@@ -556,9 +567,11 @@ async function loadBody() {
     api("/api/plans?sort=day&order=asc&limit=1000").then((r) => r.items),
     api(`/api/daily_summary/${localDay(new Date())}`),
     api("/api/ai_requests?sort=created_at&order=desc&limit=100").then((r) => r.items),
+    api("/api/apple_heart_rate?sort=updated_at&order=desc&limit=1&omit=samples").then((r) => r.items),
   ]);
+  state.appleSync = heart[0]?.updated_at ?? null;
   state.ai = aiDocs.map((doc) => ({ id: doc.id, created_at: doc.created_at, ...doc.data }));
-  state.summary = summary?.data.text ?? null;
+  state.summary = summary ? { text: summary.data.text, at: summary.updated_at } : null;
   state.plans = plans.map((doc) => ({ id: doc.id, ...doc.data }));
   state.swims = new Map(swims.map((doc) => [doc.id, swimSummary(doc.data)]));
   state.totals = new Map(totals.map((t) => [t.date, t]));
@@ -1707,6 +1720,7 @@ async function waitForAnswer(id, key) {
     const doc = await api(`/api/ai_requests/${id}`);
     if (doc?.data.status !== "pending") {
       state.ai = state.ai.map((item) => (item.id === id ? { ...item, ...doc.data } : item));
+      if (doc?.data.kind === "daily" && doc.data.answer) state.summary = { text: doc.data.answer, at: doc.updated_at };
       render();
       return;
     }
@@ -1799,7 +1813,36 @@ function heroCard() {
       ringGauge("Pripravenosť", state.readiness.at(-1)?.score ?? null, "#/telo"),
       ringGauge("Sila", strengthToday(), "#/sila", null, [90, 60])),
     plan ? h("a", { class: "hero-plan", href: plan.sport === "sila" ? "#/sila" : `#/kalendar/${today}`, text: `Dnes: ${plan.sport === "sila" ? "" : `${PLAN_SPORTS[plan.sport].mark} `}${plan.title}` }) : null,
-    state.summary ? h("p", { class: "summary", text: state.summary }) : null);
+    summaryBlock());
+}
+// Today, yesterday or a date, so an old value is obvious at a glance.
+function whenLabel(iso) {
+  const date = new Date(iso), day = localDay(date), today = localDay(new Date());
+  const time = date.toLocaleTimeString("sk-SK", { hour: "2-digit", minute: "2-digit" });
+  return day === today ? `dnes ${time}` : day === addDays(today, -1) ? `včera ${time}` : `${shortDate(day)} ${time}`;
+}
+function summaryBlock() {
+  const key = aiKey("daily");
+  const busy = isWaiting(state.ai.find((item) => item.kind === "daily"));
+  const box = h("div", { class: "hero-summary" });
+  const refresh = () => askAi({ kind: "daily" }, key);
+  const fresh = state.summary?.at && localDay(new Date(state.summary.at)) === localDay(new Date());
+  if (state.summary) box.append(h("p", { class: `summary${fresh ? "" : " stale"}`, text: state.summary.text }));
+  const line = h("div", { class: "hero-meta" });
+  if (state.summary || busy) {
+    line.append(h("span", { text: busy ? "Aktualizujem sumár…" : `Sumár ${whenLabel(state.summary.at)}` }));
+    const button = h("button", { class: `refresh${busy ? " spinning" : ""}`, "aria-label": "Aktualizovať sumár", onclick: refresh });
+    button.disabled = busy;
+    button.append(s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("path", { d: "M20 11a8 8 0 1 0-2.3 6.3M20 5v6h-6" })));
+    line.append(button);
+  } else {
+    line.append(h("button", { class: "hero-create", text: "Vytvoriť sumár dňa", onclick: refresh }));
+  }
+  box.append(line);
+  if (state.appleSync) box.append(h("div", { class: "hero-meta", text: `Apple Zdravie ${whenLabel(state.appleSync)}` }));
+  const error = aiErrorNote(key);
+  if (error) box.append(error);
+  return box;
 }
 function alertsCard() {
   const today = localDay(new Date());
