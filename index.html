@@ -266,6 +266,54 @@ a.visit:hover .title { text-decoration: underline; }
 .login form { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
 .login input { width: 100%; }
 .error { color: var(--ink); font-size: 13px; }
+/* App look: fewer words, bigger shapes */
+:root { --ring-good: var(--good); --ring-warning: var(--warning); --ring-critical: var(--critical); --ring-track: var(--wash); }
+body { font-size: 15px; }
+h1 { font-size: 20px; }
+h2 { font-size: 16px; }
+.card, .tile { border: 0; border-radius: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.06); position: relative; }
+.card { padding: 16px; }
+.tile { padding: 14px; }
+.tile .value { font-size: 28px; }
+.tile .delta:empty { display: none; }
+.grid2, .grid3, .tiles { gap: 10px; }
+.card .note:not(.keep), .card > .hint, main > .hint { display: none; }
+.card.show-info .note:not(.keep), .card.show-info > .hint { display: block; }
+.login .note { display: block !important; }
+.info { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; min-height: 0; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 15px; }
+.card.has-info .card-head { padding-right: 26px; }
+.hero { color: #fff; background: linear-gradient(135deg, #1e2952, #0f766e); --ring-good: #4ade80; --ring-warning: #fbbf24; --ring-critical: #f87171; --ring-track: rgba(255,255,255,.18); }
+.hero .summary { margin: 14px 0 0; font-size: 15px; line-height: 1.45; }
+.hero-plan { display: block; margin-top: 12px; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.14); color: #fff; font-weight: 600; text-decoration: none; }
+.rings { display: flex; justify-content: space-around; gap: 6px; }
+.ring { flex: 1; min-width: 0; max-width: 130px; text-align: center; color: inherit; text-decoration: none; }
+.ring-dial { position: relative; width: 84px; height: 84px; margin: 0 auto 4px; }
+.ring-dial svg { display: block; width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring-dial b { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 25px; font-weight: 680; }
+.ring .name { font-size: 13px; font-weight: 600; }
+.ring .sub { font-size: 12px; opacity: .75; }
+.dots { display: flex; gap: 4px; margin-top: 5px; }
+.dots i { width: 13px; height: 13px; border-radius: 50%; background: var(--wash); }
+.goals { gap: 12px 24px; align-items: flex-end; }
+.goals .fact .value { font-size: 17px; }
+.week-day .day { height: 42px; border-radius: 12px; font-size: 16px; }
+.mark { flex: none; display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; border-radius: 12px; color: #fff; font-weight: 700; font-size: 16px; }
+.record, .row { gap: 12px; }
+.sets span { padding: 3px 9px; border-radius: 8px; font-size: 13px; }
+.ai > button { border-color: var(--hrv); font-weight: 600; }
+.seg button, .seg a { border-radius: 0; }
+.subnav, .seg.metric { border-radius: 10px; }
+.muscle-group { margin: 0; border-top: 1px solid var(--grid); }
+.muscle-group summary { padding: 11px 0; color: var(--ink); font-size: 14.5px; font-weight: 600; }
+nav.tabs svg { display: none; }
+@media (max-width: 760px) {
+  main { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+  nav.tabs { position: fixed; z-index: 5; left: 0; right: 0; bottom: 0; margin: 0; padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); justify-content: space-around; overflow: visible; border-top: 1px solid var(--grid); border-bottom: 0; background: var(--surface); }
+  nav.tabs a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; padding: 4px 0; margin: 0; border: 0; font-size: 11px; font-weight: 600; }
+  nav.tabs svg { display: block; width: 23px; height: 23px; }
+  nav.tabs a[aria-current=page] { color: var(--hrv); border: 0; }
+  .filters { gap: 8px; }
+}
 </style>
 </head>
 <body>
@@ -351,6 +399,13 @@ const ANSWER_POLLS = 40;
 const ANSWER_POLL_MS = 3000;
 const AI_DAILY_LIMIT = 20;
 const COACH_PRESETS = ["Čo dnes trénovať?", "Mám dnes zvýšiť váhy?", "Kde stagnujem a čo s tým?", "Ako upraviť budúci týždeň?"];
+const TAB_ICONS = {
+  prehlad: "M3 11l9-8 9 8v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z",
+  sila: "M6 7v10M3 10v4M18 7v10M21 10v4M6 12h12",
+  vytrvalost: "M3 12h4l3-7 4 14 3-7h4",
+  kalendar: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4",
+  trener: "M4 5h16v11H9l-5 4z",
+};
 const MIN_TREND_POINTS = 3;
 // Below this a 100 m pace is a lap the watch cut wrong, not real swimming.
 const FASTEST_PACE_100M = 60;
@@ -397,7 +452,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, ai: [], aiError: null, aiDrafts: {}, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, ai: [], aiError: null, aiDrafts: {}, aiOpen: null, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -992,15 +1047,9 @@ function strengthCard(withLink = true) {
     h("h2", { text: "Silový tréning" }),
     h("p", { class: "note", text: "Podľa času od zaťaženia partie a počtu sérií" }))));
   card.append(h("div", { class: "readiness" },
-    h("div", { class: "score", text: String(shown) }),
     h("div", {}, statusBadge(verdict), h("div", { class: "parts", text: detail }))));
-  for (const region of regions) {
-    card.append(h("div", { class: "region" },
-      h("div", { class: "region-head" }, h("span", { text: region.label }),
-        h("span", { text: region.remaining > 0 ? `${region.score} %, ešte ${Math.ceil(region.remaining)} h` : "100 %, pripravená" })),
-      h("div", { class: "meter", role: "img", "aria-label": `${region.label}: ${region.score} percent` },
-        Object.assign(h("i"), { style: `width:${region.score}%` }))));
-  }
+  card.append(h("div", { class: "rings", style: "margin-top:12px" }, ...regions.map((region) =>
+    ringGauge(region.label, region.score, "#/sila/treningy", region.remaining > 0 ? `ešte ${Math.ceil(region.remaining)} h` : "pripravená", [90, 60]))));
   if (withLink) card.append(h("a", { class: "more", href: "#/sila", text: "Tréningy a cviky ›" }));
   return card;
 }
@@ -1034,17 +1083,49 @@ const kgText = (kg) => `${num(kg, kg % 1 ? 1 : 0)} kg`;
 const workoutHref = (id) => `#/sila/trening/${id}`;
 const exerciseHref = (name) => `#/sila/cvik/${encodeURIComponent(name)}`;
 
+function ringGauge(label, value, href, sub, limits = [67, 34]) {
+  const radius = 35, length = 2 * Math.PI * radius;
+  const tone = value == null ? "track" : value >= limits[0] ? "good" : value >= limits[1] ? "warning" : "critical";
+  const circle = (attrs) => s("circle", { cx: 42, cy: 42, r: radius, fill: "none", "stroke-width": 9, ...attrs });
+  const dial = s("svg", { viewBox: "0 0 84 84", "aria-hidden": "true" }, circle({ stroke: "var(--ring-track)" }),
+    value == null ? null : circle({ stroke: `var(--ring-${tone})`, "stroke-linecap": "round", "stroke-dasharray": `${(length * value) / 100} ${length}` }));
+  return h("a", { class: "ring", href, "aria-label": `${label}: ${value ?? "bez dát"}` },
+    h("div", { class: "ring-dial" }, dial, h("b", { text: value == null ? "–" : String(value) })),
+    h("div", { class: "name", text: label }), sub ? h("div", { class: "sub", text: sub }) : null);
+}
+function mark(text, color) {
+  return h("span", { class: "mark", text, style: `background:var(--${color})`, "aria-hidden": "true" });
+}
+function goalDots(label, done, goal) {
+  return h("div", { class: "fact", "aria-label": `${label}: ${done} z ${goal}` }, h("div", { class: "label", text: label }),
+    h("div", { class: "dots" }, ...Array.from({ length: Math.max(goal, done) }, (_, i) => Object.assign(h("i"), i < done ? { style: "background:var(--hrv)" } : {}))));
+}
+function enhance() {
+  for (const card of app.querySelectorAll(".card")) {
+    if (card.querySelector(":scope > .note:not(.keep), :scope > .hint, :scope > .card-head .note:not(.keep)")) {
+      card.classList.add("has-info");
+      card.append(h("button", { class: "info", text: "ⓘ", "aria-label": "Vysvetlenie", onclick: () => card.classList.toggle("show-info") }));
+    }
+  }
+}
 function fact(label, value, unit) {
   return h("div", { class: "fact" }, h("div", { class: "label", text: label }), h("div", { class: "value" }, value, unit && h("small", { text: unit })));
 }
+// Equal sets in a row become one chip, so a workout reads at a glance.
 function setChips(sets) {
-  return h("div", { class: "sets" }, ...sets.map((set) => h("span", { text: setLabel(set) })));
+  const groups = [];
+  for (const set of sets) {
+    const label = setLabel(set), last = groups[groups.length - 1];
+    if (last?.label === label) last.count++;
+    else groups.push({ label, count: 1 });
+  }
+  return h("div", { class: "sets" }, ...groups.map((g) => h("span", { text: g.count > 1 ? `${g.count}× ${g.label}` : g.label })));
 }
 function workoutRow(w, active) {
   return h("a", { class: "row", href: workoutHref(w.id), "aria-current": String(active) },
-    h("div", { class: "date", text: shortDate(w.day) }),
+    mark(REGION_LETTERS[w.region] ?? "S", "strength"),
     h("div", { class: "main" }, h("div", { class: "title", text: w.region }),
-      h("div", { class: "sub", text: `${w.sets} sérií · ${num(w.volume / 1000, 1)} t · ${w.exercises.length} cvikov` })),
+      h("div", { class: "sub", text: `${shortDate(w.day)} · ${w.sets} sérií · ${num(w.volume / 1000, 1)} t` })),
     h("span", { class: "chev", text: "›", "aria-hidden": "true" }));
 }
 function exerciseRow(entry, active) {
@@ -1063,7 +1144,7 @@ function backLink(href, label) {
 function workoutPane(workout, index) {
   const pane = h("section", { class: "card detail" }, backLink("#/sila/treningy", "Tréningy"),
     h("h2", { text: workout.region }),
-    h("p", { class: "note", text: `${fullDate(workout.day)} · ${workout.title}` }),
+    h("p", { class: "note keep", text: `${fullDate(workout.day)} · ${workout.title}` }),
     h("div", { class: "facts" }, fact("Objem", num(workout.volume / 1000, 1), "t"), fact("Série", String(workout.sets)),
       fact("Cviky", String(workout.exercises.length)), workout.time && fact("Čas", workout.time)),
     aiBlock("workout", workout.id, "Zhodnotiť tréning"),
@@ -1128,7 +1209,7 @@ function exercisePane(entry) {
     });
     pane.append(chart);
   } else {
-    pane.append(h("p", { class: "note", text: "Graf sa zobrazí po druhom tréningu s týmto cvikom." }));
+    pane.append(h("p", { class: "note keep", text: "Graf sa zobrazí po druhom tréningu s týmto cvikom." }));
   }
 
   pane.append(h("h2", { text: "História", style: "margin-top:16px" }),
@@ -1223,11 +1304,11 @@ function dayPanel(day, list) {
   const today = localDay(new Date());
   const totals = state.totals.get(day);
   const daily = [totals?.steps ? `${num(totals.steps)} krokov` : null, totals?.active_calories ? `${num(totals.active_calories)} aktívnych kcal` : null].filter(Boolean).join(" · ");
-  const card = h("section", { class: "card panel" }, h("h2", { text: fullDate(day) }), daily ? h("p", { class: "note", text: daily }) : null);
+  const card = h("section", { class: "card panel" }, h("h2", { text: fullDate(day) }), daily ? h("p", { class: "note keep", text: daily }) : null);
   card.append(...plansOn(day).map(planRow));
   if (day >= today) card.append(h("div", { class: "group-head", text: "Pridať tréning" }), workoutPicker(null, day));
   if (!list?.length) {
-    if (day < today) card.append(h("p", { class: "note", text: "Bez tréningu." }));
+    if (day < today) card.append(h("p", { class: "note keep", text: "Bez tréningu." }));
     return card;
   }
   for (const { activity: a, workout, mark } of list) {
@@ -1292,8 +1373,7 @@ function progressView(index) {
   const flat = real.filter((r) => Math.abs(r.change) < TREND_THRESHOLD).sort((a, b) => b.weeksFlat - a.weeksFlat);
   return [
     aiBlock("strength", null, "Zhodnotiť progres"),
-    h("p", { class: "hint", text: `Odhad 1RM za posledné 4 týždne oproti 4 predchádzajúcim. Hodnotím cviky z oboch období, ${plural(skipped, "cvik je", "cviky sú", "cvikov je")} nových alebo zatiaľ bez porovnania.` }),
-    h("div", { class: "grid3" },
+        h("div", { class: "grid3" },
       trendGroup("Rastie", `O ${num(TREND_THRESHOLD, 1)} % a viac`, up),
       trendGroup("Stojí", `Zmena do ${num(TREND_THRESHOLD, 1)} %`, flat, true),
       trendGroup("Klesá", `O ${num(TREND_THRESHOLD, 1)} % a viac`, down, true)),
@@ -1347,9 +1427,10 @@ function recordsView(index) {
     h("p", { class: "note", text: "Najvyššia váha a najlepší odhad 1RM pri každom cviku, podľa partií." }));
   for (const [muscle, list] of bestByMuscle(index)) {
     if (!list.length) continue;
-    all.append(h("div", { class: "group-head", text: muscle }));
+    const group = h("details", { class: "muscle-group" }, h("summary", { text: `${muscle} (${list.length})` }));
+    all.append(group);
     for (const r of list) {
-      all.append(h("a", { class: "record", href: exerciseHref(r.name) },
+      group.append(h("a", { class: "record", href: exerciseHref(r.name) },
         h("div", { class: "main" }, h("div", { class: "title", text: r.name }), h("div", { class: "sub", text: `${shortDate(r.heaviest.workout.day)} · ${r.count}×` })),
         h("div", { class: "value" }, setLabel(r.heaviest.top), h("small", { text: `1RM ${num(r.orm)} kg` }))));
     }
@@ -1600,6 +1681,7 @@ async function askAi(payload, key) {
     if (!res.ok) throw new Error(body.error);
     state.ai = [{ id: body.id, created_at: body.created_at, ...body.data }, ...state.ai];
     delete state.aiDrafts[key];
+    state.aiOpen = null;
     render();
     await waitForAnswer(body.id, key);
   } catch (error) {
@@ -1647,7 +1729,11 @@ function threadView(root) {
     else box.append(h("div", { class: "ai-wait", text: "Odpoveď neprišla." }));
   }
   const last = replies.at(-1) ?? root;
-  if (!isWaiting(last)) box.append(questionBox(key, "Spýtaj sa ďalej…", (question) => askAi({ kind: "followup", ref: last.id, question }, key)));
+  if (!isWaiting(last)) {
+    box.append(state.aiOpen === key || state.aiDrafts[key]
+      ? questionBox(key, "Spýtaj sa ďalej…", (question) => askAi({ kind: "followup", ref: last.id, question }, key))
+      : h("div", { class: "week-actions" }, h("button", { text: "Spýtať sa ďalej", onclick: () => { state.aiOpen = key; render(); } })));
+  }
   const error = aiErrorNote(key);
   if (error) box.append(error);
   return box;
@@ -1671,7 +1757,7 @@ function coachView() {
   const questions = state.ai.filter((item) => item.kind === "question");
   const ask = (question) => askAi({ kind: "question", question }, key);
   const card = h("section", { class: "card" }, h("h2", { text: "Opýtaj sa trénera" }),
-    h("p", { class: "note", text: `Pozná tvoje tréningy, tep, plán aj cviky. Dnes ${used} z ${AI_DAILY_LIMIT} súhrnov a otázok.` }),
+    h("p", { class: "note keep", text: `Pozná tvoje tréningy, tep, plán aj cviky. Dnes ${used} z ${AI_DAILY_LIMIT} súhrnov a otázok.` }),
     h("div", { class: "presets" }, ...COACH_PRESETS.map((question) => h("button", { text: question, onclick: () => ask(question) }))),
     questionBox(key, "Napíš otázku k tréningu…", ask));
   const error = aiErrorNote(key);
@@ -1685,9 +1771,21 @@ function coachView() {
   }
   return [card, history];
 }
-function summaryCard() {
-  if (!state.summary) return null;
-  return h("section", { class: "card" }, h("h2", { text: "Dnes" }), h("p", { class: "summary", text: state.summary }));
+function strengthToday() {
+  const planned = plannedStrength();
+  return planned?.day === localDay(new Date()) ? plannedScore(planned) : bestRegion().score;
+}
+function heroCard() {
+  const today = localDay(new Date());
+  const recovery = state.recovery.at(-1);
+  const plan = plansOn(today).find((item) => !planDone(item));
+  return h("section", { class: "card hero" },
+    h("div", { class: "rings" },
+      ringGauge("Recovery", recovery?.day === today ? recovery.score : null, "#/telo"),
+      ringGauge("Pripravenosť", state.readiness.at(-1)?.score ?? null, "#/telo"),
+      ringGauge("Sila", strengthToday(), "#/sila", null, [90, 60])),
+    plan ? h("a", { class: "hero-plan", href: plan.sport === "sila" ? "#/sila" : `#/kalendar/${today}`, text: `Dnes: ${plan.sport === "sila" ? "" : `${PLAN_SPORTS[plan.sport].mark} `}${plan.title}` }) : null,
+    state.summary ? h("p", { class: "summary", text: state.summary }) : null);
 }
 function alertsCard() {
   const today = localDay(new Date());
@@ -1830,7 +1928,7 @@ function weekCard() {
   const sets = state.workouts.filter((w) => days.includes(w.day)).reduce((sum, w) => sum + w.sets, 0);
   const weekPlans = state.plans.filter((plan) => days.includes(plan.day));
   card.append(h("div", { class: "goals" },
-    ...Object.entries(goals).map(([sport, goal]) => fact(PLAN_SPORTS[sport].label, `${activitiesIn(days, sport).length} z ${goal}`)),
+    ...Object.entries(goals).map(([sport, goal]) => goalDots(PLAN_SPORTS[sport].label, activitiesIn(days, sport).length, goal)),
     fact("Série", String(sets)), fact("Vytrvalosť", num(kilometres, 1), "km"),
     weekPlans.length ? fact("Plán splnený", `${weekPlans.filter(planDone).length} z ${weekPlans.length}`) : null));
 
@@ -1909,7 +2007,7 @@ function zoneSummary(title, rows) {
   const verdict = share(0) >= 75 ? "Väčšina času je ľahká, to je dobrý základ."
     : share(1) > share(0) ? "Najviac času je v strednom pásme, ľahké tréningy skús spomaliť."
     : "Ľahkého času je menej, než sa bežne odporúča, ľahké tréningy skús spomaliť.";
-  card.append(h("p", { class: "note", text: `${plural(rows.length, "aktivita", "aktivity", "aktivít")}, ${num(total / 3600, 1)} h. ${verdict}` }),
+  card.append(h("p", { class: "note keep", text: `${plural(rows.length, "aktivita", "aktivity", "aktivít")}, ${num(total / 3600, 1)} h. ${verdict}` }),
     zoneBar(seconds),
     h("div", { class: "zone-sums" }, ...INTENSITY_ZONES.map((z, i) => h("span", {}, h("b", { text: `${share(i)} %` }), ` ${z.label.toLowerCase()}`))));
   return card;
@@ -1925,7 +2023,7 @@ function intensityView(nav) {
   const list = rows.filter((r) => r.day >= from);
   const filter = h("div", { class: "seg metric", role: "group", "aria-label": "Obdobie" },
     ...INTENSITY_WEEKS.map(([weeks, label]) => h("button", { "aria-pressed": String(state.intensityWeeks === weeks), text: label, onclick: () => { state.intensityWeeks = weeks; render(); } })));
-  const info = h("p", { class: "hint", text: `Čas v pásmach zo vzoriek tepu počas behu a jazdy. Ľahké pod ${Math.round(limits[0])} bpm, stredné do ${Math.round(limits[1])} bpm, náročné nad tým. Vytrvalostní športovci mávajú okolo 80 % ľahko.` });
+  const info = legend(INTENSITY_ZONES.map((z, i) => ({ color: z.color, label: `${z.label} ${[`pod ${Math.round(limits[0])}`, `do ${Math.round(limits[1])}`, `nad ${Math.round(limits[1])}`][i]}` })));
 
   const today = localDay(new Date());
   const firstWeek = mondayOf(from);
@@ -2026,7 +2124,7 @@ function sportRecords(sport, all) {
   });
 }
 function compareText(now, before, text, lowerIsBetter) {
-  if (now == null || before == null || !before) return "bez porovnania";
+  if (now == null || before == null || !before) return "";
   const diff = now - before;
   if (Math.abs(diff) < 1e-9) return "bez zmeny";
   return `${diff > 0 ? "+" : "−"}${text(Math.abs(diff))}${lowerIsBetter ? (diff < 0 ? " (lepšie)" : " (horšie)") : ""}`;
@@ -2050,7 +2148,7 @@ function sportView() {
   const list = all.filter((a) => dayOf(a) >= from);
   const previous = prevFrom ? all.filter((a) => dayOf(a) >= prevFrom && dayOf(a) < from) : [];
   const now = sportSummary(sport, list), was = sportSummary(sport, previous);
-  const cmp = (value, before, text, lower) => (prevFrom && previous.length ? compareText(value, before, text, lower) : "bez porovnania");
+  const cmp = (value, before, text, lower) => (prevFrom && previous.length ? compareText(value, before, text, lower) : "");
   const tile = (label, value, unit, delta) => h("div", { class: "tile" }, h("div", { class: "label", text: label }),
     h("div", { class: "value" }, value, unit ? h("small", { text: unit }) : null), h("div", { class: "delta", text: delta }));
   const paceTile = now.pace == null ? "–" : sport.paceText(now.pace);
@@ -2086,7 +2184,7 @@ function sportView() {
     trend.append(legend([{ kind: "dot", color: sport.color, label: "aktivita" }, { kind: "line", color: sport.color, label: `priemer ${ROLLING_ACTIVITIES} aktivít` }]), chart,
       table([{ label: "Deň" }, { label: metric.label, num: true }, { label: "Názov" }], points.slice().reverse().map((p) => [fullDate(p.day), metric.text(p.value), p.a.name])));
   } else {
-    trend.append(h("p", { class: "note", text: `Graf sa zobrazí od ${MIN_TREND_POINTS} aktivít v období. Teraz ${points.length}, skús dlhšie obdobie.` }));
+    trend.append(h("p", { class: "note keep", text: `Graf sa zobrazí od ${MIN_TREND_POINTS} aktivít v období. Teraz ${points.length}, skús dlhšie obdobie.` }));
   }
 
   const monthly = !state.sportRange;
@@ -2115,6 +2213,7 @@ function sportView() {
   const recent = [...list].reverse().slice(0, 12);
   const listCard = h("section", { class: "card" }, h("h2", { text: `Posledné aktivity (${list.length})` }), h("div", { class: "rows-plain" },
     ...recent.map((a) => h("a", { class: "record", href: `#/vytrvalost/${key}/${a.id}` },
+      mark(PLAN_SPORTS[key].mark, PLAN_SPORTS[key].color),
       h("div", { class: "main" }, h("div", { class: "title", text: a.name }),
         h("div", { class: "sub", text: [shortDate(dayOf(a)), hours(a.moving_time), a.total_elevation_gain ? `${num(a.total_elevation_gain)} m↑` : null].filter(Boolean).join(" · ") })),
       h("div", { class: "value" }, `${num(a.distance / 1000, 1)} km`, h("small", { text: [sport.paceText(sport.pace(a)), a.average_heartrate ? `${num(a.average_heartrate)} bpm` : null].filter(Boolean).join(" · ") }))))));
@@ -2218,7 +2317,7 @@ function readinessCard() {
     list.slice().reverse().map((d) => [fullDate(d.day), String(d.score), num(d.loadScore), d.bodyScore == null ? "–" : num(d.bodyScore)])));
   return card;
 }
-function tiles() {
+function tiles(from_, to) {
   const { from, prevFrom } = periods();
   const { hrv, strava } = state.trend;
   const rest = state.rest;
@@ -2233,10 +2332,10 @@ function tiles() {
   const workouts = cur(strava, "start_date_local"), workoutsPrev = prev(strava, "start_date_local");
   const sum = (list, key) => list.reduce((a, b) => a + (b[key] || 0), 0);
   const change = (now, before, digits, unit) => {
-    if (now == null || before == null) return "bez porovnania";
+    if (now == null || before == null) return "";
     const diff = now - before;
     const sign = diff > 0 ? "+" : diff < 0 ? "−" : "±";
-    return `${sign}${num(Math.abs(diff), digits)}${unit} oproti minulému obdobiu`;
+    return `${sign}${num(Math.abs(diff), digits)}${unit}`;
   };
   const tile = (label, value, unit, delta, hero) => h("div", { class: `tile${hero ? " hero" : ""}` },
     h("div", { class: "label", text: label }),
@@ -2244,13 +2343,14 @@ function tiles() {
     h("div", { class: "delta", text: delta }));
   const seconds = workouts.reduce((total, a) => total + duration(a), 0);
   const secondsPrev = workoutsPrev.reduce((total, a) => total + duration(a), 0);
-  return h("div", { class: "tiles" },
-    tile("Priemerné HRV", hrvNow == null ? "–" : num(hrvNow, 1), "ms", change(hrvNow, hrvPrev, 1, " ms")),
+  return h("div", { class: "tiles" }, ...[
+    tile("HRV", hrvNow == null ? "–" : num(hrvNow, 1), "ms", change(hrvNow, hrvPrev, 1, " ms")),
     tile("Pokojový tep", restNow == null ? "–" : num(restNow), "bpm", change(restNow, restPrev, 1, " bpm")),
     tile("Kroky za deň", stepsNow == null ? "–" : num(stepsNow), "", change(stepsNow, stepsPrev, 0, "")),
     tile("Tréningy", String(workouts.length), "", change(workouts.length, workoutsPrev.length, 0, "")),
     tile("Čas tréningov", num(seconds / 3600, 1), "h", change(seconds / 3600, secondsPrev / 3600, 1, " h")),
-    tile("Vzdialenosť", num(sum(workouts, "distance") / 1000), "km", change(sum(workouts, "distance") / 1000, sum(workoutsPrev, "distance") / 1000, 0, " km")));
+    tile("Vzdialenosť", num(sum(workouts, "distance") / 1000), "km", change(sum(workouts, "distance") / 1000, sum(workoutsPrev, "distance") / 1000, 0, " km")),
+  ].slice(from_, to));
 }
 function dayCard() {
   const card = h("section", { class: "card" });
@@ -2263,7 +2363,7 @@ function dayCard() {
 
   const avg = mean(buckets.map((b) => b.avg));
   const lo = Math.min(...buckets.map((b) => b.lo)), hi = Math.max(...buckets.map((b) => b.hi));
-  head.append(h("p", { class: "note", text: `Priemer ${num(avg)} bpm, rozsah ${lo}–${hi} bpm` }));
+  head.append(h("p", { class: "note keep", text: `Priemer ${num(avg)} bpm, rozsah ${lo}–${hi} bpm` }));
 
   const regions = state.trend.strava.filter((a) => a.start_date_local.slice(0, 10) === state.day).map((a) => {
     const start = new Date(a.start_date);
@@ -2414,30 +2514,6 @@ function loadCard() {
       bars.filter((b) => b.total).reverse().map((b) => [b.title, ...b.parts.map((p) => num(p.value, 1))])),
   });
 }
-function workoutsCard() {
-  const { from } = periods();
-  const activities = state.trend.strava.filter((a) => a.start_date_local.slice(0, 10) >= from).slice(0, 12);
-  const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("h2", { text: "Posledné tréningy" })));
-  if (!activities.length) { card.append(h("div", { class: "empty", text: "V tomto období nie sú tréningy." })); return card; }
-  card.append(h("div", { class: "scroll" }, h("table", {},
-    h("thead", {}, h("tr", {}, ...[["Deň"], ["Šport"], ["Názov", "name"], ["Čas", "num"], ["Vzdialenosť", "num"], ["Tep", "num"]].map(([label, cls]) => h("th", { ...(cls ? { class: cls } : {}), text: label })))),
-    h("tbody", {}, ...activities.map((a) => {
-      const day = a.start_date_local.slice(0, 10);
-      const lifted = a.sport_type === "WeightTraining" && state.workouts.some((w) => w.id === String(a.id));
-      const cells = [
-        [h("button", { class: "link", text: shortDate(day), title: "Zobraziť tep v tento deň", onclick: () => selectDay(day) })],
-        SPORT_NAMES[a.sport_type] ?? a.sport_type,
-        a.name,
-      ];
-      return h("tr", {},
-        h("td", {}, ...cells[0]), h("td", { text: cells[1] }), h("td", { class: "name" }, lifted ? h("a", { href: workoutHref(a.id), text: cells[2] }) : cells[2]),
-        h("td", { class: "num", text: hours(duration(a)) }),
-        h("td", { class: "num", text: a.distance ? `${num(a.distance / 1000, 1)} km` : "–" }),
-        h("td", { class: "num", text: a.average_heartrate ? num(a.average_heartrate) : "–" }));
-    })))));
-  return card;
-}
-
 /* Shell */
 const app = document.getElementById("app");
 function drawCharts() {
@@ -2458,31 +2534,37 @@ function route() {
   const [, page = "prehlad", kind = "", id = ""] = location.hash.slice(1).split("/");
   return { page: page || "prehlad", kind, id: decodeURIComponent(id) };
 }
+const OVERVIEW_PAGES = ["prehlad", "telo", "aktivita"];
 function tabs(page) {
-  const tab = (id, href, label) => h("a", { href, text: label, ...(page === id ? { "aria-current": "page" } : {}) });
+  const active = OVERVIEW_PAGES.includes(page) ? "prehlad" : page;
+  const tab = (id, href, label) => {
+    const link = h("a", { href, ...(active === id ? { "aria-current": "page" } : {}) }, s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("path", { d: TAB_ICONS[id] })), label);
+    return link;
+  };
   return h("nav", { class: "tabs" }, tab("prehlad", "#/", "Prehľad"), tab("sila", "#/sila", "Sila"), tab("vytrvalost", "#/vytrvalost", "Vytrvalosť"), tab("kalendar", "#/kalendar", "Kalendár"), tab("trener", "#/trener", "Tréner"));
+}
+function overviewNav(page) {
+  const link = (id, href, label) => h("a", { href, "aria-current": String(page === id), text: label });
+  return h("div", { class: "seg subnav", role: "group", "aria-label": "Prehľad" }, link("prehlad", "#/", "Dnes"), link("telo", "#/telo", "Telo"), link("aktivita", "#/aktivita", "Aktivita"));
+}
+function overviewView(page) {
+  if (page === "telo") {
+    return [overviewNav(page), filters(), tiles(0, 2), h("div", { class: "grid2" }, recoveryCard(), readinessCard()), dayCard(), h("div", { class: "grid2" }, hrvCard(), restCard()),
+      h("div", { class: "grid2" }, measureCard("Hmotnosť", weightNote(), state.weight, "kilograms", 1, "kg", "var(--ride)"),
+        measureCard("VO2 Max", "Kondícia podľa Apple Watch", state.vo2, "vo2_ml_per_min_per_kg", 1, "ml/kg/min", "var(--strength)"))];
+  }
+  if (page === "aktivita") {
+    return [overviewNav(page), filters(), tiles(2, 6), h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")), loadCard()];
+  }
+  return [overviewNav(page), heroCard(), alertsCard(), weekCard()].filter(Boolean);
 }
 function render() {
   const { page } = route();
   const head = h("header", {}, h("h1", { text: "Zdravie" }), h("button", { class: "link", text: "Odhlásiť", onclick: logout }));
-  if (page === "sila") {
-    app.replaceChildren(head, tabs(page), ...strengthView());
-  } else if (page === "vytrvalost") {
-    app.replaceChildren(head, tabs(page), ...sportView());
-  } else if (page === "trener") {
-    app.replaceChildren(head, tabs(page), ...coachView());
-  } else if (page === "kalendar") {
-    app.replaceChildren(head, tabs(page), ...calendarView());
-  } else {
-    const cards = [h("div", { class: "grid2" }, strengthCard(), recoveryCard()), readinessCard(), dayCard(),
-      h("div", { class: "grid2" }, hrvCard(), restCard()),
-      h("div", { class: "grid2" }, measureCard("Hmotnosť", weightNote(), state.weight, "kilograms", 1, "kg", "var(--ride)"),
-        measureCard("VO2 Max", "Kondícia podľa Apple Watch", state.vo2, "vo2_ml_per_min_per_kg", 1, "ml/kg/min", "var(--strength)")),
-      h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")),
-      loadCard(), workoutsCard()];
-    app.replaceChildren(head, tabs(page), ...[summaryCard(), alertsCard(), weekCard()].filter(Boolean), filters(), ...cards.slice(0, 2), tiles(), ...cards.slice(2));
-  }
+  const views = { sila: strengthView, vytrvalost: sportView, trener: coachView, kalendar: calendarView };
+  app.replaceChildren(head, tabs(page), ...(views[page]?.() ?? overviewView(page)));
   drawCharts();
+  enhance();
 }
 function showError() {
   app.classList.remove("loading");
