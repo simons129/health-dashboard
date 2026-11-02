@@ -436,6 +436,11 @@ const TAB_ICONS = {
   kalendar: "M4 6h16v14H4zM4 10h16M8 3v4M16 3v4",
   trener: "M4 5h16v11H9l-5 4z",
 };
+// A web app cannot start another app in the background. This Shortcut runs Sync Health Data.
+const SYNC_SHORTCUT = "shortcuts://run-shortcut?name=Zdravie%20sync";
+const RELOAD_GAP_MS = 60 * 1000;
+const SYNC_POLLS = 12;
+const SYNC_POLL_MS = 5000;
 const MIN_TREND_POINTS = 3;
 // Below this a 100 m pace is a lap the watch cut wrong, not real swimming.
 const FASTEST_PACE_100M = 60;
@@ -483,7 +488,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -1834,6 +1839,28 @@ function whenLabel(iso) {
 }
 // The last measurement, not the arrival: one sync carries at most 1000 heart rate samples.
 const appleStatus = () => `Apple Zdravie: dáta do ${whenLabel(state.appleLast)}`;
+function refreshIcon() {
+  return s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("path", { d: "M20 11a8 8 0 1 0-2.3 6.3M20 5v6h-6" }));
+}
+// Fresh data when coming back to the app, without disturbing someone who is typing.
+async function reloadData(force) {
+  const typing = ["TEXTAREA", "INPUT"].includes(document.activeElement?.tagName);
+  if (!state.trend || !apiKey || typing || (!force && Date.now() - state.loadedAt < RELOAD_GAP_MS)) return;
+  state.loadedAt = Date.now();
+  await Promise.all([loadTrend(), loadDay(), loadReadiness(), loadBody()]);
+  render();
+}
+async function watchSync() {
+  const before = state.appleLast;
+  state.syncing = true;
+  render();
+  for (let i = 0; i < SYNC_POLLS && state.appleLast === before; i++) {
+    await new Promise((resolve) => setTimeout(resolve, SYNC_POLL_MS));
+    if (document.visibilityState === "visible") await reloadData(true).catch(() => {});
+  }
+  state.syncing = false;
+  render();
+}
 function summaryBlock() {
   const key = aiKey("daily");
   const busy = isWaiting(state.ai.find((item) => item.kind === "daily"));
@@ -1846,13 +1873,17 @@ function summaryBlock() {
     line.append(h("span", { text: busy ? "Aktualizujem sumár…" : `Sumár ${whenLabel(state.summary.at)}` }));
     const button = h("button", { class: `refresh${busy ? " spinning" : ""}`, "aria-label": "Aktualizovať sumár", onclick: refresh });
     button.disabled = busy;
-    button.append(s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("path", { d: "M20 11a8 8 0 1 0-2.3 6.3M20 5v6h-6" })));
+    button.append(refreshIcon());
     line.append(button);
   } else {
     line.append(h("button", { class: "hero-create", text: "Vytvoriť sumár dňa", onclick: refresh }));
   }
   box.append(line);
-  if (state.appleLast) box.append(h("div", { class: "hero-meta", text: appleStatus() }));
+  if (state.appleLast) {
+    const sync = h("a", { class: `refresh${state.syncing ? " spinning" : ""}`, href: SYNC_SHORTCUT, "aria-label": "Synchronizovať Apple Zdravie", onclick: watchSync });
+    sync.append(refreshIcon());
+    box.append(h("div", { class: "hero-meta" }, h("span", { text: appleStatus() }), sync));
+  }
   const error = aiErrorNote(key);
   if (error) box.append(error);
   return box;
@@ -2712,6 +2743,10 @@ addEventListener("hashchange", () => {
   render();
   // The day panel stays in view beside the calendar, a jump to the top would only lose the week.
   if (!(route().page === "kalendar" && innerWidth > 860)) scrollTo(0, 0);
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") reloadData().catch(() => {});
 });
 
 let resizeTimer;
