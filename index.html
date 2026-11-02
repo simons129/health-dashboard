@@ -327,6 +327,10 @@ h2 { font-size: 16px; }
 .seg.subnav { gap: 18px; margin-bottom: 12px; border-bottom: 1px solid var(--grid); border-radius: 0; }
 .seg.subnav a, .seg.subnav a:first-child, .seg.subnav a:last-child { padding: 8px 0; min-height: 0; border-radius: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; font-size: 14.5px; }
 .seg.subnav a[aria-current=true] { background: none; color: var(--ink); border-bottom-color: var(--hrv); }
+.latest { flex: none; text-align: right; }
+.latest b { display: block; font-size: 22px; font-weight: 680; line-height: 1.15; }
+.latest span { color: var(--ink-2); font-size: 12px; }
+.card > .legend { margin-bottom: 8px; }
 .gear { display: flex; color: var(--muted); padding: 4px; }
 .gear svg { width: 22px; height: 22px; }
 .muscle-group { margin: 0; border-top: 1px solid var(--grid); }
@@ -479,7 +483,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleSync: null, appleLast: null, ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -576,7 +580,6 @@ async function loadBody() {
     api("/api/ai_requests?sort=created_at&order=desc&limit=100").then((r) => r.items),
     api("/api/apple_heart_rate?sort=updated_at&order=desc&limit=1").then((r) => r.items),
   ]);
-  state.appleSync = heart[0]?.updated_at ?? null;
   state.appleLast = Object.keys(heart[0]?.data.samples ?? {}).sort().at(-1) ?? null;
   state.ai = aiDocs.map((doc) => ({ id: doc.id, created_at: doc.created_at, ...doc.data }));
   state.summary = summary ? { text: summary.data.text, at: summary.updated_at } : null;
@@ -1829,11 +1832,8 @@ function whenLabel(iso) {
   const time = date.toLocaleTimeString("sk-SK", { hour: "2-digit", minute: "2-digit" });
   return day === today ? `dnes ${time}` : day === addDays(today, -1) ? `včera ${time}` : `${shortDate(day)} ${time}`;
 }
-// One sync carries at most 1000 heart rate samples, so what arrived can end well before the arrival.
-function appleStatus() {
-  const arrived = `Apple Zdravie ${whenLabel(state.appleSync)}`;
-  return state.appleLast ? `${arrived} · tep do ${whenLabel(state.appleLast)}` : arrived;
-}
+// The last measurement, not the arrival: one sync carries at most 1000 heart rate samples.
+const appleStatus = () => `Apple Zdravie: dáta do ${whenLabel(state.appleLast)}`;
 function summaryBlock() {
   const key = aiKey("daily");
   const busy = isWaiting(state.ai.find((item) => item.kind === "daily"));
@@ -1852,7 +1852,7 @@ function summaryBlock() {
     line.append(h("button", { class: "hero-create", text: "Vytvoriť sumár dňa", onclick: refresh }));
   }
   box.append(line);
-  if (state.appleSync) box.append(h("div", { class: "hero-meta", text: appleStatus() }));
+  if (state.appleLast) box.append(h("div", { class: "hero-meta", text: appleStatus() }));
   const error = aiErrorNote(key);
   if (error) box.append(error);
   return box;
@@ -2435,6 +2435,8 @@ function dayCard() {
   const avg = mean(buckets.map((b) => b.avg));
   const lo = Math.min(...buckets.map((b) => b.lo)), hi = Math.max(...buckets.map((b) => b.hi));
   head.append(h("p", { class: "note keep", text: `Priemer ${num(avg)} bpm, rozsah ${lo}–${hi} bpm` }));
+  const lastBucket = buckets[buckets.length - 1];
+  head.after(h("div", { class: "latest" }, h("b", { text: `${num(lastBucket.avg)} bpm` }), h("span", { text: clock(lastBucket.minute) })));
 
   const regions = state.trend.strava.filter((a) => a.start_date_local.slice(0, 10) === state.day).map((a) => {
     const start = new Date(a.start_date);
@@ -2462,9 +2464,17 @@ function dayCard() {
   card.append(table([{ label: "Hodina" }, { label: "Priemer", num: true }, { label: "Min", num: true }, { label: "Max", num: true }], hourly));
   return card;
 }
+function dayName(day) {
+  const today = localDay(new Date());
+  return day === today ? "dnes" : day === addDays(today, -1) ? "včera" : shortDate(day);
+}
+function latestValue(text, day, average) {
+  return h("div", { class: "latest" }, h("b", { text }), h("span", { text: average ? `${dayName(day)} · priemer ${average}` : dayName(day) }));
+}
 function trendCard(title, note, list, build) {
   const card = h("section", { class: "card" });
-  card.append(h("div", { class: "card-head" }, h("div", {}, h("h2", { text: title }), h("p", { class: "note", text: note })), build.legend));
+  card.append(h("div", { class: "card-head" }, h("div", {}, h("h2", { text: title }), h("p", { class: "note", text: note })), list.length ? build.latest?.() : null));
+  if (build.legend) card.append(build.legend);
   if (!list.length) { card.append(h("div", { class: "empty", text: "V tomto období nie sú dáta." })); return card; }
   const chart = h("div", { class: "chart" });
   card.append(chart);
@@ -2492,6 +2502,7 @@ function hrvCard() {
   const start = list[0]?.day ?? from;
   const x = list.map((d) => daysBetween(start, d.day));
   return trendCard("HRV", "Denný priemer SDNN z Apple Watch", list, {
+    latest: () => latestValue(`${num(values.at(-1))} ms`, list.at(-1).day, `${num(mean(values))} ms`),
     legend: legend([{ kind: "dot", color: "var(--hrv)", label: "deň" }, { kind: "line", color: "var(--hrv)", label: "7-dňový priemer" }]),
     draw: (el) => lineChart(el, {
       x, xMin: 0, xMax: daysBetween(start, today), xTicks: dateAxis(start, today),
@@ -2511,6 +2522,7 @@ function restCard() {
   const start = list[0]?.day ?? from;
   const x = list.map((d) => daysBetween(start, d.day));
   return trendCard("Pokojový tep", "Hodnota z Apple Watch", list.length >= 2 ? list : [], {
+    latest: () => latestValue(`${list.at(-1).bpm} bpm`, list.at(-1).day, `${num(mean(list.map((d) => d.bpm)))} bpm`),
     draw: (el) => lineChart(el, {
       x, xMin: 0, xMax: daysBetween(start, today), xTicks: dateAxis(start, today),
       series: [{ color: "var(--hr)", values: list.map((d) => d.bpm) }],
@@ -2528,6 +2540,7 @@ function measureCard(title, note, rows, field, digits, unit, color) {
   const x = list.map((d) => daysBetween(start, d.day));
   const values = list.map((d) => d[field]);
   return trendCard(title, note, list.length >= 2 ? list : [], {
+    latest: () => latestValue(`${num(values.at(-1), digits)} ${unit}`, list.at(-1).day, `${num(mean(values), digits)} ${unit}`),
     draw: (el) => lineChart(el, {
       x, xMin: 0, xMax: daysBetween(start, today), xTicks: dateAxis(start, today),
       series: [{ color, values }, { color, values, dots: true }],
@@ -2554,7 +2567,11 @@ function totalsCard(title, field, unit, color) {
     bars.push({ tick: shortDate(day), title: weekly ? `Týždeň od ${shortDate(day)}` : fullDate(day), total: value, parts: [{ color, label: weekly ? "priemer za deň" : "", value }] });
   }
   const format = (v) => `${num(v)} ${unit}`;
+  const known = [...state.totals.keys()].filter((day) => state.totals.get(day)[field]).sort();
+  const lastDay = known.at(-1);
+  const inRange = known.filter((day) => day >= from).map((day) => state.totals.get(day)[field]);
   return trendCard(title, weekly ? "Priemer za deň v jednotlivých týždňoch" : "Za každý deň", bars.filter((b) => b.total), {
+    latest: () => latestValue(format(state.totals.get(lastDay)[field]), lastDay, format(mean(inRange))),
     draw: (el) => barChart(el, { bars, label: title, format }),
     table: () => table([{ label: weekly ? "Týždeň" : "Deň" }, { label: `${title} (${unit})`, num: true }],
       bars.filter((b) => b.total).reverse().map((b) => [b.title, num(b.total)])),
@@ -2616,7 +2633,7 @@ function tabs(page) {
 }
 function settingsView() {
   return [h("section", { class: "card" }, h("h2", { text: "Nastavenia" }),
-    h("div", { class: "facts" }, fact("Apple Zdravie", state.appleSync ? whenLabel(state.appleSync) : "–"), fact("Tep do", state.appleLast ? whenLabel(state.appleLast) : "–")),
+    h("div", { class: "facts" }, fact("Apple Zdravie, dáta do", state.appleLast ? whenLabel(state.appleLast) : "–")),
     h("div", { class: "week-actions" }, h("button", { text: "Odhlásiť sa", onclick: logout })))];
 }
 function overviewNav(page) {
@@ -2625,12 +2642,12 @@ function overviewNav(page) {
 }
 function overviewView(page) {
   if (page === "telo") {
-    return [overviewNav(page), filters(), tiles(0, 2), h("div", { class: "grid2" }, recoveryCard(), readinessCard()), dayCard(), h("div", { class: "grid2" }, hrvCard(), restCard()),
+    return [overviewNav(page), filters(), h("div", { class: "grid2" }, recoveryCard(), readinessCard()), dayCard(), h("div", { class: "grid2" }, hrvCard(), restCard()),
       h("div", { class: "grid2" }, measureCard("Hmotnosť", weightNote(), state.weight, "kilograms", 1, "kg", "var(--ride)"),
         measureCard("VO2 Max", "Kondícia podľa Apple Watch", state.vo2, "vo2_ml_per_min_per_kg", 1, "ml/kg/min", "var(--strength)"))];
   }
   if (page === "aktivita") {
-    return [overviewNav(page), filters(), tiles(2, 6), h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")), loadCard()];
+    return [overviewNav(page), filters(), tiles(3, 6), h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")), loadCard()];
   }
   return [overviewNav(page), heroCard(), alertsCard(), weekCard()].filter(Boolean);
 }
