@@ -224,6 +224,14 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
 .ask { margin-top: 8px; }
 .ask textarea { width: 100%; min-height: 56px; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; resize: vertical; }
+.fold { margin: 0; }
+.fold summary { padding: 4px 0; color: var(--ink); font-size: 14.5px; font-weight: 600; }
+.more-list summary { padding: 10px 0 2px; color: var(--ink-2); font-size: 13.5px; }
+.tiles.compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.tiles.compact .tile { padding: 11px; }
+.tiles.compact .tile .value { font-size: 19px; }
+.tiles.compact .tile .value small { display: block; margin: 0; font-size: 11px; }
+.tiles.compact .tile .label, .tiles.compact .tile .delta { font-size: 11.5px; }
 .write-error { color: var(--ink); font-size: 13px; margin-top: 6px; }
 .visit { display: block; padding: 10px 0; border-top: 1px solid var(--grid); color: inherit; text-decoration: none; }
 .visit .title { font-weight: 600; font-size: 13.5px; }
@@ -439,7 +447,8 @@ const TREND_DAYS = 28;
 const TREND_THRESHOLD = 2.5;
 // A month cannot change strength this much, it means another machine or a logging mistake.
 const SUSPICIOUS_CHANGE = 30;
-const CALENDAR_WEEKS = 26;
+const CALENDAR_WEEKS = 12;
+const SHORT_LIST = 5;
 // Same colors as the training volume chart, so a sport looks the same on every page.
 const ACTIVITY_ICONS = {
   Ride: "🚴", VirtualRide: "🚴", EBikeRide: "🚴", GravelRide: "🚴", MountainBikeRide: "🚴",
@@ -452,7 +461,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, ai: [], aiError: null, aiDrafts: {}, aiOpen: null, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -1093,6 +1102,10 @@ function ringGauge(label, value, href, sub, limits = [67, 34]) {
     h("div", { class: "ring-dial" }, dial, h("b", { text: value == null ? "–" : String(value) })),
     h("div", { class: "name", text: label }), sub ? h("div", { class: "sub", text: sub }) : null);
 }
+// The rest of a long list, one tap away. Empty lists leave nothing behind.
+function moreList(rows) {
+  return rows.length ? h("details", { class: "fold more-list" }, h("summary", { text: `Zobraziť ďalších ${rows.length}` }), ...rows) : "";
+}
 function mark(text, color) {
   return h("span", { class: "mark", text, style: `background:var(--${color})`, "aria-hidden": "true" });
 }
@@ -1214,15 +1227,14 @@ function exercisePane(entry) {
 
   pane.append(h("h2", { text: "História", style: "margin-top:16px" }),
     h("p", { class: "hint", text: "Vpravo je zmena najvyššej váhy oproti predchádzajúcemu tréningu." }));
-  for (const p of [...sessions].reverse()) {
-    pane.append(h("a", { class: "ex", href: workoutHref(p.workout.id) },
-      h("div", { class: "ex-head" }, h("span", { class: "name", text: fullDate(p.workout.day) }),
-        h("span", { class: "right" },
-          p.record ? h("span", { class: "badge", text: "Rekord" }) : null,
-          p.change ? h("span", { text: signed(p.change) }) : null,
-          h("span", { class: "chev", text: "›", "aria-hidden": "true" }))),
-      setChips(p.sets)));
-  }
+  const history = [...sessions].reverse().map((p) => h("a", { class: "ex", href: workoutHref(p.workout.id) },
+    h("div", { class: "ex-head" }, h("span", { class: "name", text: fullDate(p.workout.day) }),
+      h("span", { class: "right" },
+        p.record ? h("span", { class: "badge", text: "Rekord" }) : null,
+        p.change ? h("span", { text: signed(p.change) }) : null,
+        h("span", { class: "chev", text: "›", "aria-hidden": "true" }))),
+    setChips(p.sets)));
+  pane.append(...history.slice(0, SHORT_LIST), moreList(history.slice(SHORT_LIST)));
   return pane;
 }
 const plural = (n, one, few, many) => `${n} ${n === 1 ? one : n >= 2 && n <= 4 ? few : many}`;
@@ -1764,11 +1776,13 @@ function coachView() {
   if (error) card.append(error);
   const history = h("section", { class: "card" }, h("h2", { text: "Rozhovory" }));
   if (!questions.length) history.append(h("div", { class: "empty", text: "Zatiaľ žiadna otázka." }));
-  for (const item of questions.slice(0, 15)) {
-    history.append(h("div", { class: "ai-q", text: item.question }));
-    if (item.status === "done") history.append(h("div", { class: "ai-text", text: item.answer }), threadView(item));
-    else history.append(isWaiting(item) ? waitingNote() : h("div", { class: "ai-wait", text: "Odpoveď neprišla." }));
-  }
+  questions.slice(0, 15).forEach((item, index) => {
+    const open = state.openChats.has(item.id) || index === 0;
+    const body = item.status === "done" ? [h("div", { class: "ai-text", text: item.answer }), threadView(item)]
+      : [isWaiting(item) ? waitingNote() : h("div", { class: "ai-wait", text: "Odpoveď neprišla." })];
+    history.append(h("details", { class: "muscle-group", ...(open ? { open: "" } : {}), ontoggle: (event) => { if (event.target.open) state.openChats.add(item.id); else state.openChats.delete(item.id); } },
+      h("summary", { text: item.question }), ...body));
+  });
   return [card, history];
 }
 function strengthToday() {
@@ -2152,7 +2166,7 @@ function sportView() {
   const tile = (label, value, unit, delta) => h("div", { class: "tile" }, h("div", { class: "label", text: label }),
     h("div", { class: "value" }, value, unit ? h("small", { text: unit }) : null), h("div", { class: "delta", text: delta }));
   const paceTile = now.pace == null ? "–" : sport.paceText(now.pace);
-  const tiles = h("div", { class: "tiles" },
+  const tiles = h("div", { class: "tiles compact" },
     tile("Aktivity", String(now.count), "", cmp(now.count, was.count, String)),
     tile("Vzdialenosť", num(now.distance), "km", cmp(now.distance, was.distance, (v) => `${num(v)} km`)),
     tile("Čas", num(now.seconds / 3600, 1), "h", cmp(now.seconds, was.seconds, (v) => `${num(v / 3600, 1)} h`)),
@@ -2210,21 +2224,22 @@ function sportView() {
       h("div", { class: "main" }, h("div", { class: "title", text: r.label }), h("div", { class: "sub", text: `${shortDate(dayOf(r.a))} ${dayOf(r.a).slice(0, 4)}` })),
       h("div", { class: "value" }, r.value, h("small", { text: r.a.name })))));
 
-  const recent = [...list].reverse().slice(0, 12);
-  const listCard = h("section", { class: "card" }, h("h2", { text: `Posledné aktivity (${list.length})` }), h("div", { class: "rows-plain" },
-    ...recent.map((a) => h("a", { class: "record", href: `#/vytrvalost/${key}/${a.id}` },
+  const recent = [...list].reverse();
+  const activityRows = recent.map((a) => h("a", { class: "record", href: `#/vytrvalost/${key}/${a.id}` },
       mark(PLAN_SPORTS[key].mark, PLAN_SPORTS[key].color),
       h("div", { class: "main" }, h("div", { class: "title", text: a.name }),
         h("div", { class: "sub", text: [shortDate(dayOf(a)), hours(a.moving_time), a.total_elevation_gain ? `${num(a.total_elevation_gain)} m↑` : null].filter(Boolean).join(" · ") })),
-      h("div", { class: "value" }, `${num(a.distance / 1000, 1)} km`, h("small", { text: [sport.paceText(sport.pace(a)), a.average_heartrate ? `${num(a.average_heartrate)} bpm` : null].filter(Boolean).join(" · ") }))))));
+      h("div", { class: "value" }, `${num(a.distance / 1000, 1)} km`, h("small", { text: [sport.paceText(sport.pace(a)), a.average_heartrate ? `${num(a.average_heartrate)} bpm` : null].filter(Boolean).join(" · ") }))));
+  const listCard = h("section", { class: "card" }, h("h2", { text: `Aktivity (${list.length})` }),
+    h("div", { class: "rows-plain" }, ...activityRows.slice(0, SHORT_LIST), moreList(activityRows.slice(SHORT_LIST))));
   if (!recent.length) listCard.append(h("div", { class: "empty", text: "V tomto období žiadna aktivita." }));
 
   const swims = key === "plavanie" ? [...state.swims.values()].sort((a, b) => b.day.localeCompare(a.day)) : [];
   const swim = swims.find((x) => x.id === route().id) ?? swims[0];
-  const planner = h("section", { class: "card" }, h("h2", { text: "Tréning na dnes" }),
-    h("p", { class: "note", text: "Vyber typ, návrh vychádza z tvojich posledných tréningov." }), workoutPicker(key, null));
+  const planner = h("section", { class: "card" }, h("details", { class: "fold", ...(state.plannerOpen ? { open: "" } : {}), ontoggle: (event) => { state.plannerOpen = event.target.open; } },
+    h("summary", { text: "Naplánovať tréning" }), workoutPicker(key, null)));
   const opened = key === "plavanie" ? null : all.find((a) => String(a.id) === route().id);
-  return [nav, opened ? activityCard(sport, opened) : null, swim ? swimCard(swim) : null, planner, filter, tiles, trend, h("div", { class: "grid2" }, volume, recordCard), listCard].filter(Boolean);
+  return [nav, opened ? activityCard(sport, opened) : null, swim ? swimCard(swim) : null, filter, tiles, trend, planner, h("div", { class: "grid2" }, volume, recordCard), listCard].filter(Boolean);
 }
 function strengthNav(active) {
   const link = (href, id, label) => h("a", { href, "aria-current": String(active === id), text: label });
