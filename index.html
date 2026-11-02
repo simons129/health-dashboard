@@ -220,9 +220,6 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .ai { margin: 10px 0; }
 .ai-text { white-space: pre-line; font-size: 14px; line-height: 1.5; margin: 6px 0; border-left: 3px solid var(--hrv); padding-left: 10px; }
 .ai-wait { color: var(--ink-2); font-size: 13px; }
-.ai-q { font-weight: 620; font-size: 13.5px; margin-top: 12px; }
-.presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
-.ask textarea { width: 100%; min-height: 72px; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; resize: vertical; }
 .write-error { color: var(--ink); font-size: 13px; margin-top: 6px; }
 .visit { display: block; padding: 10px 0; border-top: 1px solid var(--grid); color: inherit; text-decoration: none; }
 .visit .title { font-weight: 600; font-size: 13.5px; }
@@ -346,10 +343,8 @@ const ALERT_MISSED_PLANS = 2;
 const ALERT_STALE_DAYS = 2;
 const ALERT_HIDE_DAYS = 3;
 const ALERT_HIDDEN_KEY = "hidden_alerts";
-const COACH_DAILY_LIMIT = 10;
-const COACH_POLLS = 40;
-const COACH_POLL_MS = 3000;
-const COACH_PRESETS = ["Čo dnes trénovať?", "Mám dnes zvýšiť váhy?", "Kde stagnujem a čo s tým?", "Prečo mi nerastie beh?", "Ako upraviť budúci týždeň?"];
+const SUMMARY_POLLS = 40;
+const SUMMARY_POLL_MS = 3000;
 const MIN_TREND_POINTS = 3;
 // Below this a 100 m pace is a lap the watch cut wrong, not real swimming.
 const FASTEST_PACE_100M = 60;
@@ -396,7 +391,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, ai: [], aiError: "", aiDraft: "", plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, ai: [], aiError: null, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -492,7 +487,7 @@ async function loadBody() {
     api(`/api/daily_summary/${localDay(new Date())}`),
     api("/api/ai_requests?sort=created_at&order=desc&limit=50").then((r) => r.items),
   ]);
-  state.ai = aiDocs.map((doc) => ({ id: doc.id, ...doc.data }));
+  state.ai = aiDocs.map((doc) => ({ id: doc.id, created_at: doc.created_at, ...doc.data }));
   state.summary = summary?.data.text ?? null;
   state.plans = plans.map((doc) => ({ id: doc.id, ...doc.data }));
   state.swims = new Map(swims.map((doc) => [doc.id, swimSummary(doc.data)]));
@@ -1077,6 +1072,7 @@ function exercisePane(entry) {
     pane.append(h("div", { class: "facts" }, fact("Naposledy", setLabel(last.sets[0]))));
   }
 
+  pane.append(aiBlock("exercise", entry.name, "Zhodnotiť cvik"));
   if (Object.keys(metrics).length > 1) {
     pane.append(h("div", { class: "seg metric", role: "group", "aria-label": "Zobrazená hodnota" },
       ...Object.entries(metrics).map(([id, [label]]) => h("button", { "aria-pressed": String(id === key), text: label,
@@ -1258,6 +1254,7 @@ function progressView(index) {
   const down = real.filter((r) => r.change <= -TREND_THRESHOLD).sort((a, b) => a.change - b.change);
   const flat = real.filter((r) => Math.abs(r.change) < TREND_THRESHOLD).sort((a, b) => b.weeksFlat - a.weeksFlat);
   return [
+    aiBlock("strength", null, "Zhodnotiť progres"),
     h("p", { class: "hint", text: `Odhad 1RM za posledné 4 týždne oproti 4 predchádzajúcim. Hodnotím cviky z oboch období, ${plural(skipped, "cvik je", "cviky sú", "cvikov je")} nových alebo zatiaľ bez porovnania.` }),
     h("div", { class: "grid3" },
       trendGroup("Rastie", `O ${num(TREND_THRESHOLD, 1)} % a viac`, up),
@@ -1554,69 +1551,53 @@ function hideAlert(id) {
   try { localStorage.setItem(ALERT_HIDDEN_KEY, JSON.stringify(hidden)); } catch {}
   render();
 }
-async function askCoach(payload) {
-  state.aiError = "";
+async function requestSummary(kind, ref) {
+  const key = aiKey(kind, ref);
+  state.aiError = null;
   try {
     const res = await fetch(`${API}/ai/ask`, {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ kind, ref }),
     });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error);
-    state.ai = [{ id: body.id, ...body.data }, ...state.ai];
-    if (payload.kind === "question") state.aiDraft = "";
+    state.ai = [{ id: body.id, created_at: body.created_at, ...body.data }, ...state.ai];
     render();
-    await waitForAnswer(body.id);
+    await waitForSummary(body.id, key);
   } catch (error) {
-    state.aiError = error.message || "Tréner teraz neodpovedá.";
+    state.aiError = { key, text: error.message || "Súhrn sa nepodarilo pripraviť." };
     render();
   }
 }
-async function waitForAnswer(id) {
-  for (let i = 0; i < COACH_POLLS; i++) {
-    await new Promise((resolve) => setTimeout(resolve, COACH_POLL_MS));
+async function waitForSummary(id, key) {
+  for (let i = 0; i < SUMMARY_POLLS; i++) {
+    await new Promise((resolve) => setTimeout(resolve, SUMMARY_POLL_MS));
     const doc = await api(`/api/ai_requests/${id}`);
     if (doc?.data.status !== "pending") {
-      state.ai = state.ai.map((item) => (item.id === id ? { id, ...doc.data } : item));
+      state.ai = state.ai.map((item) => (item.id === id ? { ...item, ...doc.data } : item));
       render();
       return;
     }
   }
   state.ai = state.ai.map((item) => (item.id === id ? { ...item, status: "failed" } : item));
-  state.aiError = "Odpoveď neprišla včas. Skús to znova.";
+  state.aiError = { key, text: "Súhrn neprišiel včas. Skús to znova." };
   render();
 }
+const aiKey = (kind, ref) => `${kind}:${ref ?? ""}`;
+function isWaiting(record) {
+  return record?.status === "pending" && Date.now() - Date.parse(record.created_at) < SUMMARY_POLLS * SUMMARY_POLL_MS;
+}
 function aiBlock(kind, ref, label) {
-  const record = state.ai.find((item) => item.kind === kind && item.ref === ref);
+  const key = aiKey(kind, ref);
+  const record = state.ai.find((item) => aiKey(item.kind, item.ref) === key && item.status !== "failed");
   const box = h("div", { class: "ai" });
-  const button = (text) => h("button", { text, onclick: (event) => { event.preventDefault(); askCoach({ kind, ref }); } });
-  if (record?.status === "pending") box.append(h("div", { class: "ai-wait", text: "Tréner pozerá údaje, trvá to asi 30 sekúnd…" }));
+  const button = (text) => h("button", { text, onclick: () => requestSummary(kind, ref) });
+  if (isWaiting(record)) box.append(h("div", { class: "ai-wait", text: "Pripravujem súhrn, trvá to asi 30 sekúnd…" }));
   else if (record?.status === "done") box.append(h("div", { class: "ai-text", text: record.answer }), button("Znova"));
   else box.append(button(label));
-  if (state.aiError) box.append(h("p", { class: "write-error", text: state.aiError }));
+  if (state.aiError?.key === key) box.append(h("p", { class: "write-error", text: state.aiError.text }));
   return box;
-}
-function coachView() {
-  const today = localDay(new Date());
-  const used = state.ai.filter((item) => item.day === today).length;
-  const questions = state.ai.filter((item) => item.kind === "question");
-  const busy = questions.some((item) => item.status === "pending");
-  const input = h("textarea", { "aria-label": "Tvoja otázka", maxlength: "500", placeholder: "Napíš otázku k tréningu…", oninput: (event) => { state.aiDraft = event.target.value; } });
-  input.value = state.aiDraft;
-  const ask = (question) => askCoach({ kind: "question", question });
-  const card = h("section", { class: "card ask" }, h("h2", { text: "Opýtaj sa trénera" }),
-    h("p", { class: "note", text: `Pozná tvoje tréningy, tep, plán aj cviky. Dnes ${used} z ${COACH_DAILY_LIMIT} otázok.` }),
-    h("div", { class: "presets" }, ...COACH_PRESETS.map((question) => h("button", { text: question, onclick: () => ask(question) }))),
-    input,
-    h("div", { class: "week-actions" }, h("button", { class: "primary", text: "Opýtať sa", onclick: () => state.aiDraft.trim() && ask(state.aiDraft) })));
-  if (state.aiError) card.append(h("p", { class: "write-error", text: state.aiError }));
-  if (busy) card.append(h("p", { class: "ai-wait", text: "Tréner pozerá údaje, trvá to asi 30 sekúnd…" }));
-  const history = h("section", { class: "card" }, h("h2", { text: "Posledné otázky" }));
-  const finished = questions.filter((item) => item.status === "done");
-  if (!finished.length) history.append(h("div", { class: "empty", text: "Zatiaľ žiadna otázka." }));
-  for (const item of finished.slice(0, 15)) history.append(h("div", { class: "ai-q", text: item.question }), h("div", { class: "ai-text", text: item.answer }));
-  return [card, history];
 }
 function summaryCard() {
   if (!state.summary) return null;
@@ -1883,8 +1864,19 @@ function intensityView(nav) {
   }
   if (!list.length) activities.append(h("div", { class: "empty", text: "V tomto období žiadna aktivita." }));
   const note = skipped ? h("p", { class: "hint", text: `${plural(skipped, "aktivita nemá", "aktivity nemajú", "aktivít nemá")} dosť vzoriek tepu z hodiniek, nie ${skipped === 1 ? "je započítaná" : "sú započítané"}.` }) : null;
-  return [nav, filter, info, h("div", { class: "grid3" }, zoneSummary("Spolu", list), zoneSummary("Beh", list.filter((r) => r.sport === "beh")), zoneSummary("Bicykel", list.filter((r) => r.sport === "bicykel"))),
+  return [nav, filter, info, aiBlock("intensity", null, "Zhodnotiť intenzitu"), h("div", { class: "grid3" }, zoneSummary("Spolu", list), zoneSummary("Beh", list.filter((r) => r.sport === "beh")), zoneSummary("Bicykel", list.filter((r) => r.sport === "bicykel"))),
     weekly, activities, note].filter(Boolean);
+}
+function activityCard(sport, a) {
+  const day = a.start_date_local.slice(0, 10);
+  return h("section", { class: "card" }, h("h2", { text: a.name }), h("p", { class: "note", text: fullDate(day) }),
+    h("div", { class: "facts" },
+      fact("Vzdialenosť", num(a.distance / 1000, 1), "km"), fact("Čas", hours(a.moving_time)),
+      fact(sport.paceLabel, sport.paceText(sport.pace(a))),
+      a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null,
+      a.total_elevation_gain ? fact("Stúpanie", num(a.total_elevation_gain), "m") : null),
+    aiBlock("activity", String(a.id), "Zhodnotiť tréning"),
+    h("a", { class: "more", href: `#/kalendar/${day}`, text: "Otvoriť deň v kalendári ›" }));
 }
 function swimCard(swim) {
   const card = h("section", { class: "card" }, h("h2", { text: `Série, ${fullDate(swim.day)}` }),
@@ -1893,7 +1885,8 @@ function swimCard(swim) {
       fact("Vzdialenosť", num(swim.distance), "m"),
       fact("Plávanie", hours(swim.swimSeconds)),
       fact("Pauzy", hours(swim.restSeconds)),
-      fact("Tempo", swim.pace == null ? "–" : `${clockShort(swim.pace)} /100 m`)));
+      fact("Tempo", swim.pace == null ? "–" : `${clockShort(swim.pace)} /100 m`)),
+    aiBlock("activity", swim.id, "Zhodnotiť tréning"));
   for (const set of swim.sets) {
     card.append(h("div", { class: "record" },
       h("div", { class: "main" }, h("div", { class: "title", text: `${set.repeats} × ${set.distance} m` }),
@@ -1987,6 +1980,7 @@ function sportView() {
   const metric = metrics[metricKey];
   const points = trendActivities(sport, list).map((a) => ({ a, day: dayOf(a), value: metric.value(a) })).filter((p) => p.value != null);
   const trend = h("section", { class: "card" }, h("h2", { text: "Progres" }), h("p", { class: "note", text: metric.note }),
+    aiBlock("sport", key, "Zhodnotiť progres"),
     h("div", { class: "seg metric", role: "group", "aria-label": "Ukazovateľ" },
       ...Object.entries(metrics).map(([id, item]) => h("button", { "aria-pressed": String(id === metricKey), text: item.label, onclick: () => { state.sportMetric = id; render(); } }))));
   if (points.length >= MIN_TREND_POINTS) {
@@ -2034,7 +2028,7 @@ function sportView() {
 
   const recent = [...list].reverse().slice(0, 12);
   const listCard = h("section", { class: "card" }, h("h2", { text: `Posledné aktivity (${list.length})` }), h("div", { class: "rows-plain" },
-    ...recent.map((a) => h("a", { class: "record", href: key === "plavanie" ? `#/vytrvalost/plavanie/${a.id}` : `#/kalendar/${dayOf(a)}` },
+    ...recent.map((a) => h("a", { class: "record", href: `#/vytrvalost/${key}/${a.id}` },
       h("div", { class: "main" }, h("div", { class: "title", text: a.name }),
         h("div", { class: "sub", text: [shortDate(dayOf(a)), hours(a.moving_time), a.total_elevation_gain ? `${num(a.total_elevation_gain)} m↑` : null].filter(Boolean).join(" · ") })),
       h("div", { class: "value" }, `${num(a.distance / 1000, 1)} km`, h("small", { text: [sport.paceText(sport.pace(a)), a.average_heartrate ? `${num(a.average_heartrate)} bpm` : null].filter(Boolean).join(" · ") }))))));
@@ -2044,7 +2038,8 @@ function sportView() {
   const swim = swims.find((x) => x.id === route().id) ?? swims[0];
   const planner = h("section", { class: "card" }, h("h2", { text: "Tréning na dnes" }),
     h("p", { class: "note", text: "Vyber typ, návrh vychádza z tvojich posledných tréningov." }), workoutPicker(key, null));
-  return [nav, planner, filter, tiles, swim ? swimCard(swim) : null, trend, h("div", { class: "grid2" }, volume, recordCard), listCard].filter(Boolean);
+  const opened = key === "plavanie" ? null : all.find((a) => String(a.id) === route().id);
+  return [nav, opened ? activityCard(sport, opened) : null, swim ? swimCard(swim) : null, planner, filter, tiles, trend, h("div", { class: "grid2" }, volume, recordCard), listCard].filter(Boolean);
 }
 function strengthNav(active) {
   const link = (href, id, label) => h("a", { href, "aria-current": String(active === id), text: label });
@@ -2379,7 +2374,7 @@ function route() {
 }
 function tabs(page) {
   const tab = (id, href, label) => h("a", { href, text: label, ...(page === id ? { "aria-current": "page" } : {}) });
-  return h("nav", { class: "tabs" }, tab("prehlad", "#/", "Prehľad"), tab("sila", "#/sila", "Sila"), tab("vytrvalost", "#/vytrvalost", "Vytrvalosť"), tab("kalendar", "#/kalendar", "Kalendár"), tab("trener", "#/trener", "Tréner"));
+  return h("nav", { class: "tabs" }, tab("prehlad", "#/", "Prehľad"), tab("sila", "#/sila", "Sila"), tab("vytrvalost", "#/vytrvalost", "Vytrvalosť"), tab("kalendar", "#/kalendar", "Kalendár"));
 }
 function render() {
   const { page } = route();
@@ -2388,8 +2383,6 @@ function render() {
     app.replaceChildren(head, tabs(page), ...strengthView());
   } else if (page === "vytrvalost") {
     app.replaceChildren(head, tabs(page), ...sportView());
-  } else if (page === "trener") {
-    app.replaceChildren(head, tabs(page), ...coachView());
   } else if (page === "kalendar") {
     app.replaceChildren(head, tabs(page), ...calendarView());
   } else {
