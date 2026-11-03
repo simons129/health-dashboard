@@ -468,6 +468,7 @@ const SWIM_SAMPLE_GAP = 11;
 const SWIM_SAMPLE_STEP = 3;
 const MIN_SWIM_REST = 5;
 const SWIM_LONG_REST = 60;
+const SWIM_TREND_HALF = 3;
 const MIN_SET_REPEATS = 3;
 const ROLLING_ACTIVITIES = 5;
 // Scarf's rule: a metre of climbing costs a runner about as much as 7.92 metres on the flat.
@@ -2321,7 +2322,8 @@ function swimCard(swim) {
   if (swim.parts) {
     const chart = h("div", { class: "chart" });
     chart.draw = () => swimChart(chart, swim);
-    card.append(chart, h("p", { class: "hint", text: "Každá čiarka je jeden úsek, vyššie je rýchlejšie. Medzery sú pauzy." }), ...swim.parts.map(swimPart));
+    card.append(chart, legend([{ color: "var(--other)", label: "Úsek, vyššie je rýchlejšie" }, { color: "var(--ink)", label: "Trend série", kind: "line", opacity: 0.75 }]),
+      h("p", { class: "hint", text: "Medzery sú pauzy. Pomalšie úseky mimo mierky sú bledé pri spodnom okraji." }), ...swim.parts.map(swimPart));
     return card;
   }
   for (const set of swim.sets) {
@@ -2357,14 +2359,17 @@ function swimPart(part) {
   return el;
 }
 // Pace over the workout, faster up. Each swim is a segment as long as it lasted, so rests and
-// long pauses show as gaps.
+// long pauses show as gaps. The scale fits the usual swims, a slower one sits faded at the bottom
+// edge. The trend is a rolling mean within each part, a pause starts it anew.
 function swimChart(el, swim) {
   const paces = swim.intervals.map((i) => (i.swim / i.distance) * 100);
-  const cap = (median(paces) ?? 0) * 1.6;
-  const lo = Math.min(...paces), hi = Math.min(Math.max(...paces), cap);
-  const span = hi - lo || 10;
-  const ticks = niceTicks(lo - span * 0.1, hi + span * 0.45).reverse();
-  const { svg, plot, y } = frame(el, 190, ticks, `Tempo úsekov, ${fullDate(swim.day)}`, clockShort);
+  const sorted = [...paces].sort((a, b) => a - b);
+  const lo = sorted[Math.floor(sorted.length * 0.03)], hi = sorted[Math.ceil(sorted.length * 0.9) - 1];
+  const span = Math.max(hi - lo, 6);
+  const ticks = niceTicks(lo - span * 0.3, hi + span * 0.15).reverse();
+  const top = ticks[ticks.length - 1], bottom = ticks[0];
+  const { svg, plot, y } = frame(el, 220, ticks, `Tempo úsekov, ${fullDate(swim.day)}`, clockShort);
+  const inside = (pace) => Math.min(Math.max(pace, top), bottom);
   const total = Math.max(swim.elapsed, swim.intervals[swim.intervals.length - 1].end);
   const px = (t) => plot.x + (t / total) * plot.w;
   const step = total > 5400 ? 1800 : 900;
@@ -2376,12 +2381,20 @@ function swimChart(el, swim) {
     svg.append(s("line", { x1, x2, y1: plot.y + 16, y2: plot.y + 16, stroke: "var(--axis)" }));
     svg.append(s("text", { class: "region", x: (x1 + x2) / 2, y: plot.y + 11, "text-anchor": "middle", text: `${part.repeats}×${part.distance}` }));
   }
+  for (const part of swim.parts.filter((p) => p.items?.length >= MIN_SET_REPEATS)) {
+    const own = part.items.map((i) => paces[swim.intervals.indexOf(i)]);
+    const points = part.items.map((item, k) => {
+      const near = own.slice(Math.max(0, k - SWIM_TREND_HALF), k + SWIM_TREND_HALF + 1);
+      return `${px((item.start + item.end) / 2)},${y(inside(mean(near)))}`;
+    });
+    svg.append(s("polyline", { points: points.join(" "), fill: "none", stroke: "var(--ink)", "stroke-width": 2, "stroke-linejoin": "round", opacity: 0.75 }));
+  }
   swim.intervals.forEach((interval, n) => {
     const pace = paces[n];
-    const at = y(Math.min(pace, cap));
+    const at = y(inside(pace));
     const group = s("g", { tabindex: 0, role: "img", "aria-label": `${interval.distance} m za ${clockShort(interval.swim)}` });
     group.append(s("line", { x1: px(interval.start), x2: Math.max(px(interval.end), px(interval.start) + 1), y1: at, y2: at,
-      stroke: "var(--other)", "stroke-width": 5, "stroke-linecap": "round" }));
+      stroke: "var(--other)", "stroke-width": 5, "stroke-linecap": "round", opacity: pace > bottom || pace < top ? 0.4 : 1 }));
     const next = swim.intervals[n + 1]?.start ?? interval.end + interval.rest;
     group.append(s("rect", { x: px(interval.start), y: plot.y, width: Math.max(px(next) - px(interval.start), 4), height: plot.h, fill: "transparent" }));
     const rows = () => [
