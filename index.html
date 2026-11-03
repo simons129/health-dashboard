@@ -147,6 +147,15 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .record .sub { color: var(--ink-2); font-size: 12.5px; }
 .record .value { flex: none; text-align: right; font-size: 13.5px; font-weight: 620; }
 .record .value small { display: block; color: var(--ink-2); font-size: 12px; font-weight: 450; }
+.swim-part { padding: 10px 0; border-top: 1px solid var(--grid); }
+.swim-part .head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.swim-part .title { font-weight: 650; font-size: 15px; }
+.swim-part .title small { color: var(--ink-2); font-weight: 500; font-size: 13px; }
+.swim-part .value { text-align: right; font-weight: 620; font-variant-numeric: tabular-nums; }
+.swim-part .sub { color: var(--ink-2); font-size: 12.5px; display: flex; justify-content: space-between; gap: 10px; }
+.swim-part svg { display: block; width: 100%; height: 26px; margin-top: 6px; }
+.swim-pause { display: flex; align-items: center; gap: 10px; color: var(--ink-2); font-size: 12.5px; padding: 4px 0; }
+.swim-pause::before, .swim-pause::after { content: ""; flex: 1; border-top: 1px dashed var(--axis); }
 .plan-line { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
 .plan-line b { color: var(--ink); font-size: 14px; font-weight: 640; }
 .muscle { display: grid; grid-template-columns: 76px minmax(0, 1fr) 112px; gap: 10px; align-items: center; margin-top: 9px; font-size: 13px; }
@@ -458,6 +467,7 @@ const SLOW_SWIM_SHARE = 1.5;
 const SWIM_SAMPLE_GAP = 11;
 const SWIM_SAMPLE_STEP = 3;
 const MIN_SWIM_REST = 5;
+const SWIM_LONG_REST = 60;
 const MIN_SET_REPEATS = 3;
 const ROLLING_ACTIVITIES = 5;
 // Scarf's rule: a metre of climbing costs a runner about as much as 7.92 metres on the flat.
@@ -1584,7 +1594,7 @@ function streamSwimSummary(detail) {
     if (stream[i][1] <= stream[i - 1][1]) continue;
     let gap = 0;
     for (let j = start + 1; j <= i; j++) gap = Math.max(gap, stream[j][0] - stream[j - 1][0]);
-    lengths.push({ distance: stream[i][1] - stream[i - 1][1], time: from == null ? null : stream[i][0] - from, gap });
+    lengths.push({ distance: stream[i][1] - stream[i - 1][1], time: from == null ? null : stream[i][0] - from, gap, end: stream[i][0] });
     from = stream[i][0];
     start = i;
   }
@@ -1598,38 +1608,61 @@ function streamSwimSummary(detail) {
     const rest = sampled(length)
       ? (length.gap > SWIM_SAMPLE_GAP ? Math.min(length.gap - SWIM_SAMPLE_STEP, time - expected) : 0)
       : (time - expected >= expected / 2 ? time - expected : 0);
+    const swim = rest >= MIN_SWIM_REST ? time - rest : time;
     const last = intervals[intervals.length - 1];
     if (last && rest >= MIN_SWIM_REST) last.rest = rest;
-    const current = !last || rest >= MIN_SWIM_REST ? (intervals.push({ distance: 0, swim: 0, rest: 0 }), intervals[intervals.length - 1]) : last;
+    if (!last || rest >= MIN_SWIM_REST) intervals.push({ start: length.end - swim, distance: 0, swim: 0, rest: 0 });
+    const current = intervals[intervals.length - 1];
     current.distance += length.distance;
-    current.swim += rest >= MIN_SWIM_REST ? time - rest : time;
+    current.swim += swim;
+    current.end = length.end;
   }
 
-  const blocks = [];
-  for (const interval of intervals) {
-    const last = blocks[blocks.length - 1];
-    if (last?.distance === interval.distance) last.items.push(interval);
-    else blocks.push({ distance: interval.distance, items: [interval] });
-  }
-  const shown = blocks.flatMap((block) => {
-    if (block.items.length < MIN_SET_REPEATS) return block.items.map((i) => ({ repeats: 1, distance: i.distance, swim: i.swim, rest: i.rest, longRests: [] }));
-    const between = block.items.slice(0, -1);
-    const rest = median(between.map((i) => i.rest));
-    const usualRests = between.filter((i) => i.rest <= Math.max(rest * 2, 60));
-    return [{
-      repeats: block.items.length, distance: block.distance, swim: median(block.items.map((i) => i.swim)), rest,
-      cycle: rest && usualRests.length ? median(usualRests.map((i) => i.swim + i.rest)) : null,
-      longRests: between.filter((i) => !usualRests.includes(i)).map((i) => i.rest),
-    }];
+  // A long pause ends a set, so a workout reads the same however it is built. Long is well
+  // beyond the usual rest of this workout.
+  const longRest = Math.max(SWIM_LONG_REST, 2 * (median(intervals.slice(0, -1).map((i) => i.rest)) ?? 0));
+  const groups = [];
+  intervals.forEach((interval, n) => {
+    const last = groups[groups.length - 1];
+    if (last && last.distance === interval.distance && intervals[n - 1].rest < longRest) last.items.push(interval);
+    else groups.push({ distance: interval.distance, items: [interval] });
   });
+  const parts = [];
+  for (const group of groups) {
+    const blocks = group.items.length >= MIN_SET_REPEATS ? [group.items] : group.items.map((i) => [i]);
+    for (const items of blocks) {
+      const between = items.slice(0, -1);
+      const rest = between.length ? median(between.map((i) => i.rest)) : 0;
+      const after = items[items.length - 1].rest;
+      parts.push({
+        repeats: items.length, distance: group.distance, items, swim: median(items.map((i) => i.swim)), rest,
+        cycle: between.length && rest ? median(between.map((i) => i.swim + i.rest)) : null,
+        restAfter: after < longRest ? after : 0,
+      });
+      if (after >= longRest) parts.push({ pause: after });
+    }
+  }
+  // Single swims in a row without a long pause read as one free part.
+  const merged = [];
+  for (const part of parts) {
+    const last = merged[merged.length - 1];
+    if (part.repeats === 1 && last?.repeats === 1 || part.repeats === 1 && last?.mixed) {
+      const items = [...last.items, ...part.items];
+      merged[merged.length - 1] = {
+        mixed: true, items, repeats: items.length, distance: items.reduce((sum, i) => sum + i.distance, 0),
+        swim: items.reduce((sum, i) => sum + i.swim, 0), restAfter: part.restAfter,
+      };
+    } else merged.push(part);
+  }
+  parts.splice(0, parts.length, ...merged);
   const distance = stream[stream.length - 1][1];
   const swimSeconds = intervals.reduce((sum, i) => sum + i.swim, 0);
-  const sets = shown.filter((set) => set.repeats >= MIN_SET_REPEATS);
+  const sets = parts.filter((part) => part.repeats >= MIN_SET_REPEATS);
   const inSets = sets.reduce((sum, set) => sum + set.repeats * set.distance, 0);
   return {
     id: String(detail.id), day: detail.start_date_local.slice(0, 10), name: detail.name, distance, elapsed: detail.elapsed_time,
     pace: distance ? (swimSeconds / distance) * 100 : null, swimSeconds, restSeconds: Math.max(detail.elapsed_time - swimSeconds, 0),
-    reliable: true, sets, blocks: shown, otherDistance: Math.max(distance - inSets, 0),
+    reliable: true, sets, parts, intervals, otherDistance: Math.max(distance - inSets, 0),
   };
 }
 function sportActivities(sport) {
@@ -2285,21 +2318,84 @@ function swimCard(swim) {
       fact("Pauzy", hours(swim.restSeconds)),
       fact("Tempo", swim.pace == null ? "–" : `${clockShort(swim.pace)} /100 m`)),
     aiBlock("activity", swim.id, "Zhodnotiť tréning"));
-  // A single swim shows the rest after it, a set the usual rest between its repeats.
-  for (const set of swim.blocks ?? swim.sets) {
-    const single = set.repeats === 1;
-    const sub = single
-      ? [set.rest ? `potom pauza ${clockShort(set.rest)}` : ""]
-      : [set.rest ? `pauza ${clockShort(set.rest)}` : "bez pauzy", set.longRests.length ? `dlhšie pauzy ${set.longRests.map(clockShort).join(", ")}` : ""];
+  if (swim.parts) {
+    const chart = h("div", { class: "chart" });
+    chart.draw = () => swimChart(chart, swim);
+    card.append(chart, h("p", { class: "hint", text: "Každá čiarka je jeden úsek, vyššie je rýchlejšie. Medzery sú pauzy." }), ...swim.parts.map(swimPart));
+    return card;
+  }
+  for (const set of swim.sets) {
     card.append(h("div", { class: "record" },
-      h("div", { class: "main" }, h("div", { class: "title", text: single ? `${set.distance} m` : `${set.repeats} × ${set.distance} m${set.cycle ? ` na ${clockShort(set.cycle)}` : ""}` }),
-        h("div", { class: "sub", text: sub.filter(Boolean).join(" · ") })),
+      h("div", { class: "main" }, h("div", { class: "title", text: `${set.repeats} × ${set.distance} m` }),
+        h("div", { class: "sub", text: set.rest ? `pauza ${clockShort(set.rest)}` : "bez pauzy" })),
       h("div", { class: "value" }, clockShort(set.swim), h("small", { text: `${clockShort((set.swim / set.distance) * 100)} /100 m` }))));
   }
-  if (swim.blocks) return card;
   if (!swim.sets.length) card.append(h("p", { class: "note", text: `Bez opakovaných sérií od ${MIN_SET_REPEATS} opakovaní.` }));
   if (swim.otherDistance) card.append(h("p", { class: "hint", text: `Mimo sérií ${num(swim.otherDistance)} m, napríklad rozplávanie a voľné dĺžky.` }));
   return card;
+}
+// A set shows its rhythm as a strip: swims filled, rests empty, widths in time.
+function swimPart(part) {
+  if (part.pause) return h("div", { class: "swim-pause", text: `pauza ${clockShort(part.pause)}` });
+  const set = part.repeats > 1 && !part.mixed;
+  const pieces = part.mixed && (part.items.length <= 6 ? part.items.map((i) => i.distance).join(" · ") : `${part.items.length} úsekov`);
+  const el = h("div", { class: "swim-part" },
+    h("div", { class: "head" },
+      h("div", { class: "title" }, set ? `${part.repeats} × ${part.distance} m` : `${part.distance} m`,
+        part.cycle ? h("small", { text: ` na ${clockShort(part.cycle)}` }) : pieces ? h("small", { text: ` voľne ${pieces}` }) : null),
+      h("div", { class: "value", text: clockShort(part.swim) })),
+    h("div", { class: "sub" },
+      h("span", { text: set ? (part.rest ? `pauza ${clockShort(part.rest)}` : "bez pauzy") : part.restAfter ? `potom pauza ${clockShort(part.restAfter)}` : "" }),
+      h("span", { text: `${clockShort((part.swim / part.distance) * 100)} /100 m` })));
+  if (part.repeats > 1) {
+    const first = part.items[0].start, last = part.items[part.items.length - 1].end;
+    const strip = s("svg", { viewBox: `0 0 ${last - first} 26`, preserveAspectRatio: "none", role: "img", "aria-label": `${part.repeats} úsekov po ${part.distance} m` });
+    strip.append(s("rect", { x: 0, y: 0, width: last - first, height: 26, fill: "var(--wash)" }));
+    for (const item of part.items) strip.append(s("rect", { x: item.start - first, y: 0, width: item.end - item.start, height: 26, fill: "var(--other)" }));
+    el.append(strip);
+  }
+  return el;
+}
+// Pace over the workout, faster up. Each swim is a segment as long as it lasted, so rests and
+// long pauses show as gaps.
+function swimChart(el, swim) {
+  const paces = swim.intervals.map((i) => (i.swim / i.distance) * 100);
+  const cap = (median(paces) ?? 0) * 1.6;
+  const lo = Math.min(...paces), hi = Math.min(Math.max(...paces), cap);
+  const span = hi - lo || 10;
+  const ticks = niceTicks(lo - span * 0.1, hi + span * 0.45).reverse();
+  const { svg, plot, y } = frame(el, 190, ticks, `Tempo úsekov, ${fullDate(swim.day)}`, clockShort);
+  const total = Math.max(swim.elapsed, swim.intervals[swim.intervals.length - 1].end);
+  const px = (t) => plot.x + (t / total) * plot.w;
+  const step = total > 5400 ? 1800 : 900;
+  for (let t = 0; t <= total; t += step) svg.append(s("text", { x: px(t), y: plot.y + plot.h + 17, "text-anchor": t ? "middle" : "start", text: t ? `${t / 60} min` : "0" }));
+
+  for (const part of swim.parts.filter((p) => p.repeats >= MIN_SET_REPEATS)) {
+    const x1 = px(part.items[0].start), x2 = px(part.items[part.items.length - 1].end);
+    if (x2 - x1 < 30) continue;
+    svg.append(s("line", { x1, x2, y1: plot.y + 16, y2: plot.y + 16, stroke: "var(--axis)" }));
+    svg.append(s("text", { class: "region", x: (x1 + x2) / 2, y: plot.y + 11, "text-anchor": "middle", text: `${part.repeats}×${part.distance}` }));
+  }
+  swim.intervals.forEach((interval, n) => {
+    const pace = paces[n];
+    const at = y(Math.min(pace, cap));
+    const group = s("g", { tabindex: 0, role: "img", "aria-label": `${interval.distance} m za ${clockShort(interval.swim)}` });
+    group.append(s("line", { x1: px(interval.start), x2: Math.max(px(interval.end), px(interval.start) + 1), y1: at, y2: at,
+      stroke: "var(--other)", "stroke-width": 5, "stroke-linecap": "round" }));
+    const next = swim.intervals[n + 1]?.start ?? interval.end + interval.rest;
+    group.append(s("rect", { x: px(interval.start), y: plot.y, width: Math.max(px(next) - px(interval.start), 4), height: plot.h, fill: "transparent" }));
+    const rows = () => [
+      { color: "var(--other)", value: clockShort(interval.swim), label: `${clockShort(pace)} /100 m` },
+      interval.rest ? { value: clockShort(interval.rest), label: "pauza potom" } : null,
+    ].filter(Boolean);
+    const title = `${interval.distance} m, ${Math.floor(interval.start / 60)}. min`;
+    group.addEventListener("pointermove", (event) => showTip(event, null, title, rows()));
+    group.addEventListener("pointerleave", hideTip);
+    group.addEventListener("focus", () => showTip(null, group.getBoundingClientRect(), title, rows()));
+    group.addEventListener("blur", hideTip);
+    svg.append(group);
+  });
+  el.replaceChildren(svg);
 }
 function trendActivities(sport, list) {
   return list.filter((a) => a.distance / 1000 >= sport.minKm && a.average_speed > 0 && !(sport.skipTrainer && a.trainer));
