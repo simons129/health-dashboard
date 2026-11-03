@@ -450,6 +450,10 @@ const MIN_TREND_POINTS = 3;
 // Below this a 100 m pace is a lap the watch cut wrong, not real swimming.
 const FASTEST_PACE_100M = 60;
 const REST_SPEED_SHARE = 0.6;
+// A lap without samples that lasts this share of a usual swim lap is a swim, not a rest.
+const SWIM_LAP_SHARE = [0.85, 1.3];
+// Slower than this share of the usual pace is a swim mixed with waiting, kept out of sets.
+const SLOW_SWIM_SHARE = 1.5;
 const MIN_SET_REPEATS = 3;
 const ROLLING_ACTIVITIES = 5;
 // Scarf's rule: a metre of climbing costs a runner about as much as 7.92 metres on the flat.
@@ -1501,41 +1505,66 @@ function recordsView(index) {
 // Newer Apple Watch swims mark a rest as a lap without samples. Older ones do not, there a rest
 // is a lap much slower than the rest of the workout. Rest laps also carry part of the distance
 // of the swim before them, so distance belongs to the swim and rest + swim form one interval.
+// The watch sometimes drops the samples of a whole swim, such a lap lasts like a swim, not a rest.
+// Strava also spreads the distance evenly over all laps, rests included. When every lap has the
+// same distance, a swim's real distance is the total shared among the swims, in pool lengths.
 function swimSummary(detail) {
   const laps = detail.laps ?? [];
-  const marked = laps.filter((lap) => lap.start_index === lap.end_index).length > laps.length * 0.2;
+  const noSamples = (lap) => lap.start_index === lap.end_index;
+  const marked = laps.filter(noSamples).length > laps.length * 0.2;
   const speeds = laps.filter((lap) => lap.distance > 0).map((lap) => lap.average_speed).sort((a, b) => b - a);
   const fast = speeds[speeds.length >> 2] ?? 0;
-  const isRest = (lap) => !lap.distance || (marked ? lap.start_index === lap.end_index : lap.average_speed < fast * REST_SPEED_SHARE);
+  const usualSwim = median(laps.filter((lap) => lap.distance && !noSamples(lap)).map((lap) => lap.elapsed_time)) ?? 0;
+  const lastsLikeSwim = (lap) => lap.elapsed_time >= usualSwim * SWIM_LAP_SHARE[0] && lap.elapsed_time <= usualSwim * SWIM_LAP_SHARE[1];
+  const shortRest = (lap) => lap && lap.distance && noSamples(lap) && !lastsLikeSwim(lap);
+  const lostSwim = (lap, i) => lastsLikeSwim(lap) && shortRest(laps[i - 1]) && shortRest(laps[i + 1]);
+  const isRest = (lap, i) => !lap.distance || (marked ? noSamples(lap) && !lostSwim(lap, i) : lap.average_speed < fast * REST_SPEED_SHARE);
 
   const intervals = [];
-  for (const lap of laps) {
+  for (const [i, lap] of laps.entries()) {
     const last = intervals[intervals.length - 1];
-    if (!isRest(lap)) intervals.push({ distance: lap.distance, swim: lap.elapsed_time, rest: 0 });
+    if (!isRest(lap, i)) intervals.push({ distance: lap.distance, swim: lap.elapsed_time, rest: 0 });
     else if (last) { last.distance += lap.distance; last.rest += lap.elapsed_time; }
   }
-  const believable = intervals.filter((i) => i.swim && (i.swim / i.distance) * 100 >= FASTEST_PACE_100M);
+  const lengths = new Set(laps.filter((lap) => lap.distance).map((lap) => lap.distance));
+  if (marked && lengths.size === 1 && intervals.length) {
+    const pool = [...lengths][0];
+    const each = Math.max(1, Math.round(detail.distance / intervals.length / pool)) * pool;
+    for (const interval of intervals) interval.distance = each;
+  }
+  const usualPace = median(intervals.map((i) => i.swim / i.distance)) ?? 0;
+  const steady = intervals.filter((i) => (!marked || i.swim / i.distance <= usualPace * SLOW_SWIM_SHARE) && (i.swim / i.distance) * 100 >= FASTEST_PACE_100M);
   const splitSeconds = (detail.splits_metric ?? []).reduce((sum, split) => sum + split.moving_time, 0);
   const hasMovingTime = splitSeconds > 0 && splitSeconds < detail.elapsed_time * 0.95;
-  const lapDistance = believable.reduce((sum, i) => sum + i.distance, 0);
-  const lapSeconds = believable.reduce((sum, i) => sum + i.swim, 0);
-  const pace = hasMovingTime ? (splitSeconds / detail.distance) * 100 : lapDistance ? (lapSeconds / lapDistance) * 100 : null;
+  const lapDistance = steady.reduce((sum, i) => sum + i.distance, 0);
+  const lapSeconds = steady.reduce((sum, i) => sum + i.swim, 0);
+  const lapPace = lapDistance ? (lapSeconds / lapDistance) * 100 : null;
+  // Marked laps time each swim, Strava's moving time there still counts some of the waiting.
+  const pace = marked && lapPace ? lapPace : hasMovingTime ? (splitSeconds / detail.distance) * 100 : lapPace;
   const swimSeconds = pace == null ? detail.moving_time : (pace * detail.distance) / 100;
 
   const sets = [];
-  for (const interval of intervals.filter((i) => i.swim)) {
+  // A lap the watch cut too fast still counts as a repeat, only its time is left out.
+  for (const interval of marked ? steady : intervals.filter((i) => i.swim)) {
     const last = sets[sets.length - 1];
     if (last?.distance === interval.distance) last.items.push(interval);
     else sets.push({ distance: interval.distance, items: [interval] });
   }
   const repeated = sets.filter((set) => set.items.length >= MIN_SET_REPEATS).map((set) => {
-    const clean = set.items.filter((i) => (i.swim / i.distance) * 100 >= FASTEST_PACE_100M);
-    return { repeats: set.items.length, distance: set.distance, swim: mean(clean.map((i) => i.swim)), rest: mean(set.items.slice(0, -1).map((i) => i.rest)) };
+    const between = set.items.slice(0, -1);
+    const rest = between.length ? median(between.map((i) => i.rest)) : 0;
+    const usual = between.filter((i) => i.rest <= Math.max(rest * 2, 60));
+    const clean = set.items.filter((i) => steady.includes(i));
+    return {
+      repeats: set.items.length, distance: set.distance, swim: median(clean.map((i) => i.swim)), rest,
+      cycle: marked && rest && usual.length ? median(usual.map((i) => i.swim + i.rest)) : null,
+      longRests: between.filter((i) => !usual.includes(i)).map((i) => i.rest),
+    };
   }).filter((set) => set.swim != null);
   const inSets = repeated.reduce((sum, set) => sum + set.repeats * set.distance, 0);
   return {
     id: String(detail.id), day: detail.start_date_local.slice(0, 10), name: detail.name, distance: detail.distance, elapsed: detail.elapsed_time,
-    pace, swimSeconds, restSeconds: Math.max(detail.elapsed_time - swimSeconds, 0), reliable: hasMovingTime, sets: repeated, otherDistance: Math.max(detail.distance - inSets, 0),
+    pace, swimSeconds, restSeconds: Math.max(detail.elapsed_time - swimSeconds, 0), reliable: marked || hasMovingTime, sets: repeated, otherDistance: Math.max(detail.distance - inSets, 0),
   };
 }
 function sportActivities(sport) {
@@ -2193,8 +2222,9 @@ function swimCard(swim) {
     aiBlock("activity", swim.id, "Zhodnotiť tréning"));
   for (const set of swim.sets) {
     card.append(h("div", { class: "record" },
-      h("div", { class: "main" }, h("div", { class: "title", text: `${set.repeats} × ${set.distance} m` }),
-        h("div", { class: "sub", text: set.rest ? `pauza ${clockShort(set.rest)}` : "bez pauzy" })),
+      h("div", { class: "main" }, h("div", { class: "title", text: `${set.repeats} × ${set.distance} m${set.cycle ? ` na ${clockShort(set.cycle)}` : ""}` }),
+        h("div", { class: "sub", text: [set.rest ? `pauza ${clockShort(set.rest)}` : "bez pauzy",
+          set.longRests.length ? `dlhšie pauzy ${set.longRests.map(clockShort).join(", ")}` : ""].filter(Boolean).join(" · ") })),
       h("div", { class: "value" }, clockShort(set.swim), h("small", { text: `${clockShort((set.swim / set.distance) * 100)} /100 m` }))));
   }
   if (!swim.sets.length) card.append(h("p", { class: "note", text: `Bez opakovaných sérií od ${MIN_SET_REPEATS} opakovaní.` }));
