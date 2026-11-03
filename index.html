@@ -455,6 +455,7 @@ const SYNC_SHORTCUT = "shortcuts://run-shortcut?name=Zdravie%20sync";
 const RELOAD_GAP_MS = 60 * 1000;
 const SYNC_POLLS = 12;
 const SYNC_POLL_MS = 5000;
+const TIP_LINGER_MS = 1500;
 const MIN_TREND_POINTS = 3;
 // Below this a 100 m pace is a lap the watch cut wrong, not real swimming.
 const FASTEST_PACE_100M = 60;
@@ -825,6 +826,22 @@ function showTip(event, rect, title, rows) {
   tip.style.top = `${Math.max(8, y - box.height - 12)}px`;
 }
 const hideTip = () => { tip.hidden = true; };
+// A chart listens on its whole svg: a touch keeps sending its moves to the element it started
+// on, so per-mark listeners would stick to the first mark. The value stays a moment after the
+// finger lifts, a scroll or a mouse leaving clears it at once. Tapping must not focus a mark,
+// focus shows a value only for the keyboard.
+let clearChart = null;
+function scrubbing(svg, move, clear) {
+  let timer;
+  const pick = (event) => { clearTimeout(timer); clearChart?.(); clearChart = clear; move(event); };
+  svg.addEventListener("pointerdown", pick);
+  svg.addEventListener("pointermove", pick);
+  svg.addEventListener("pointerup", (event) => { if (event.pointerType !== "mouse") timer = setTimeout(clear, TIP_LINGER_MS); });
+  svg.addEventListener("pointercancel", clear);
+  svg.addEventListener("pointerleave", (event) => { if (event.pointerType === "mouse") clear(); });
+}
+const keyboardFocus = (el) => el.matches(":focus-visible");
+addEventListener("scroll", () => { clearChart?.(); hideTip(); }, { passive: true });
 
 /* Charts */
 function niceTicks(lo, hi, count = 4) {
@@ -913,16 +930,15 @@ function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, regi
     showTip(event, { left: box.left + cx * (box.width / svg.viewBox.baseVal.width), top: box.top + 30, width: 0 }, title, rows);
   };
   const clear = () => { cross.setAttribute("visibility", "hidden"); marker.setAttribute("visibility", "hidden"); hideTip(); };
-  svg.addEventListener("pointermove", (event) => {
+  scrubbing(svg, (event) => {
     const box = svg.getBoundingClientRect();
     const at = xMin + (((event.clientX - box.left) * (svg.viewBox.baseVal.width / box.width) - plot.x) / plot.w) * (xMax - xMin);
     let best = 0;
     x.forEach((v, i) => { if (Math.abs(v - at) < Math.abs(x[best] - at)) best = i; });
     show(best, event);
-  });
-  svg.addEventListener("pointerleave", clear);
+  }, clear);
   svg.addEventListener("blur", clear);
-  svg.addEventListener("focus", () => show(current));
+  svg.addEventListener("focus", () => keyboardFocus(svg) && show(current));
   svg.addEventListener("keydown", (event) => {
     const step = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
     if (!step) return;
@@ -939,6 +955,12 @@ function barChart(el, { height = 230, bars, label, format = (v) => `${num(v, 1)}
   const slot = plot.w / bars.length;
   const width = Math.min(24, Math.max(slot - 2, 2));
   const every = Math.ceil(bars.length / Math.floor(plot.w / 52));
+  const rows = (bar) => bar.parts.filter((p) => p.value > 0).reverse().map((p) => ({ color: p.color, value: format(p.value), label: p.label }));
+  scrubbing(svg, (event) => {
+    const box = svg.getBoundingClientRect();
+    const bar = bars[Math.floor(((event.clientX - box.left) * (svg.viewBox.baseVal.width / box.width) - plot.x) / slot)];
+    if (bar?.total) showTip(event, null, bar.title, rows(bar)); else hideTip();
+  }, hideTip);
   bars.forEach((bar, i) => {
     const left = plot.x + i * slot + (slot - width) / 2;
     const group = s("g", { tabindex: bar.total ? 0 : -1, role: "img", "aria-label": `${bar.title}: ${format(bar.total)}` });
@@ -954,11 +976,8 @@ function barChart(el, { height = 230, bars, label, format = (v) => `${num(v, 1)}
       base = top;
     });
     group.append(s("rect", { x: plot.x + i * slot, y: plot.y, width: slot, height: plot.h, fill: "transparent" }));
-    const rows = () => [...parts].reverse().map((p) => ({ color: p.color, value: format(p.value), label: p.label }));
     if (bar.total) {
-      group.addEventListener("pointermove", (event) => showTip(event, null, bar.title, rows()));
-      group.addEventListener("pointerleave", hideTip);
-      group.addEventListener("focus", () => showTip(null, group.getBoundingClientRect(), bar.title, rows()));
+      group.addEventListener("focus", () => keyboardFocus(group) && showTip(null, group.getBoundingClientRect(), bar.title, rows(bar)));
       group.addEventListener("blur", hideTip);
     }
     svg.append(group);
@@ -2389,6 +2408,20 @@ function swimChart(el, swim) {
     });
     svg.append(s("polyline", { points: points.join(" "), fill: "none", stroke: "var(--ink)", "stroke-width": 2, "stroke-linejoin": "round", opacity: 0.75 }));
   }
+  const tipOf = (n) => {
+    const interval = swim.intervals[n];
+    return [`${interval.distance} m, ${Math.floor(interval.start / 60)}. min`, [
+      { color: "var(--other)", value: clockShort(interval.swim), label: `${clockShort(paces[n])} /100 m` },
+      interval.rest ? { value: clockShort(interval.rest), label: "pauza potom" } : null,
+    ].filter(Boolean)];
+  };
+  scrubbing(svg, (event) => {
+    const box = svg.getBoundingClientRect();
+    const t = (((event.clientX - box.left) * (svg.viewBox.baseVal.width / box.width) - plot.x) / plot.w) * total;
+    let best = 0;
+    swim.intervals.forEach((i, n) => { if (Math.abs((i.start + i.end) / 2 - t) < Math.abs((swim.intervals[best].start + swim.intervals[best].end) / 2 - t)) best = n; });
+    showTip(event, null, ...tipOf(best));
+  }, hideTip);
   swim.intervals.forEach((interval, n) => {
     const pace = paces[n];
     const at = y(inside(pace));
@@ -2397,14 +2430,7 @@ function swimChart(el, swim) {
       stroke: "var(--other)", "stroke-width": 5, "stroke-linecap": "round", opacity: pace > bottom || pace < top ? 0.4 : 1 }));
     const next = swim.intervals[n + 1]?.start ?? interval.end + interval.rest;
     group.append(s("rect", { x: px(interval.start), y: plot.y, width: Math.max(px(next) - px(interval.start), 4), height: plot.h, fill: "transparent" }));
-    const rows = () => [
-      { color: "var(--other)", value: clockShort(interval.swim), label: `${clockShort(pace)} /100 m` },
-      interval.rest ? { value: clockShort(interval.rest), label: "pauza potom" } : null,
-    ].filter(Boolean);
-    const title = `${interval.distance} m, ${Math.floor(interval.start / 60)}. min`;
-    group.addEventListener("pointermove", (event) => showTip(event, null, title, rows()));
-    group.addEventListener("pointerleave", hideTip);
-    group.addEventListener("focus", () => showTip(null, group.getBoundingClientRect(), title, rows()));
+    group.addEventListener("focus", () => keyboardFocus(group) && showTip(null, group.getBoundingClientRect(), ...tipOf(n)));
     group.addEventListener("blur", hideTip);
     svg.append(group);
   });
