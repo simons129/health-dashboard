@@ -327,6 +327,11 @@ h2 { font-size: 16px; }
 .seg.subnav { gap: 18px; margin-bottom: 12px; border-bottom: 1px solid var(--grid); border-radius: 0; }
 .seg.subnav a, .seg.subnav a:first-child, .seg.subnav a:last-child { padding: 8px 0; min-height: 0; border-radius: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: none; font-size: 14.5px; }
 .seg.subnav a[aria-current=true] { background: none; color: var(--ink); border-bottom-color: var(--hrv); }
+.day-label { display: flex; align-items: center; gap: 6px; margin: 12px 0 2px; color: var(--ink-2); font-size: 12.5px; font-weight: 600; }
+.day-label i { width: 10px; height: 10px; border-radius: 3px; }
+.timeline { margin-top: 12px; border-top: 1px solid var(--grid); padding-top: 8px; }
+.timeline-row { display: flex; gap: 12px; padding: 4px 0; font-size: 13.5px; }
+.timeline-row .time { flex: none; width: 92px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
 .latest { flex: none; text-align: right; }
 .latest b { display: block; font-size: 22px; font-weight: 680; line-height: 1.15; }
 .latest span { color: var(--ink-2); font-size: 12px; }
@@ -488,7 +493,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -565,8 +570,16 @@ async function loadTrend() {
   state.trend = { hrv, strava };
 }
 async function loadDay() {
-  const doc = await api(`/api/apple_heart_rate/${state.day}`);
-  state.dayDoc = doc ? doc.data : null;
+  const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
+  const [heart, hrv, steps, exercise, food] = await Promise.all([
+    api(`/api/apple_heart_rate/${state.day}`),
+    api(`/api/apple_heart_rate_variability/${state.day}`),
+    api(`/api/apple_steps_hourly/${state.day}`),
+    items(`/api/apple_exercise?filter.day=${state.day}&limit=50`),
+    items(`/api/apple_nutrition?filter.day=${state.day}&limit=50`),
+  ]);
+  state.dayDoc = heart ? heart.data : null;
+  state.dayExtra = { hrv: hrv?.data.samples ?? {}, steps: steps?.data.samples ?? null, exercise, food };
 }
 // One value per day: the last one, a day can hold several measurements.
 const lastPerDay = (rows) => [...new Map(rows.map((r) => [r.day, r])).values()];
@@ -816,7 +829,7 @@ function frame(el, height, ticks, label, tickText) {
   });
   return { svg, plot, y };
 }
-function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, regions = [], gap, label, read, tickText }) {
+function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, regions = [], markers = [], gap, label, read, tickText }) {
   const all = series.flatMap((sr) => sr.values).concat(band ? [...band.lo, ...band.hi] : []).filter((v) => v != null);
   const pad = (Math.max(...all) - Math.min(...all)) * 0.08 || 2;
   const ticks = niceTicks(Math.min(...all) - pad, Math.max(...all) + pad);
@@ -826,7 +839,13 @@ function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, regi
   for (const r of regions) {
     const x1 = px(Math.max(r.from, xMin)), x2 = px(Math.min(r.to, xMax));
     svg.append(s("rect", { x: x1, y: plot.y, width: Math.max(x2 - x1, 2), height: plot.h, fill: "var(--wash)" }));
-    if (x2 - x1 > 34) svg.append(s("text", { class: "region", x: x1 + 4, y: plot.y + 12, text: r.label }));
+    if (r.short) svg.append(s("text", { class: "region", x: (x1 + x2) / 2, y: plot.y + 13, "text-anchor": "middle", text: r.short }));
+    else if (x2 - x1 > 34) svg.append(s("text", { class: "region", x: x1 + 3, y: plot.y + 13, text: r.label }));
+  }
+  for (const m of markers) {
+    const mx = px(m.at);
+    svg.append(s("line", { x1: mx, x2: mx, y1: plot.y + 16, y2: plot.y + plot.h, stroke: "var(--axis)" }));
+    svg.append(s("text", { class: "region", x: mx, y: plot.y + 12, "text-anchor": "middle", text: m.label }));
   }
   for (const t of xTicks) svg.append(s("text", { x: px(t.v), y: plot.y + plot.h + 17, "text-anchor": t.anchor ?? "middle", text: t.label }));
 
@@ -1359,7 +1378,7 @@ function dayPanel(day, list) {
     card.append(workout ? h("a", { class: "visit", href: workoutHref(workout.id) }, ...body) : h("div", { class: "visit" }, ...body),
       workout ? aiBlock("workout", workout.id, "Zhodnotiť tréning") : aiBlock("activity", String(a.id), "Zhodnotiť tréning"));
   }
-  card.append(h("a", { class: "more", href: "#/", text: "Tep v tento deň ›", onclick: () => { state.day = day; loadDay().then(render); } }));
+  card.append(h("a", { class: "more", href: "#/telo", text: "Tep a HRV v tento deň ›", onclick: () => { state.day = day; loadDay().then(render); } }));
   return card;
 }
 function calendarView() {
@@ -2454,45 +2473,99 @@ function tiles(from_, to) {
     tile("Vzdialenosť", num(sum(workouts, "distance") / 1000), "km", change(sum(workouts, "distance") / 1000, sum(workoutsPrev, "distance") / 1000, 0, " km")),
   ].slice(from_, to));
 }
+const EXERCISE_MARKS = { walking: "🚶", hiking: "🥾", running: "🏃", cycling: "🚴", swimming: "🏊", traditional_strength_training: "🏋️", downhill_skiing: "⛷️" };
+const minuteOf = (iso) => { const d = new Date(iso); return d.getHours() * 60 + d.getMinutes(); };
+// Everything that happened in the day, from Strava and from the watch, once each.
+function dayEvents() {
+  const strava = state.activities.filter((a) => a.start_date_local.slice(0, 10) === state.day).map((a) => {
+    const from = minuteOf(a.start_date);
+    const workout = a.sport_type === "WeightTraining" ? state.workouts.find((w) => w.id === String(a.id)) : null;
+    const mark = workout ? REGION_MARKS[workout.region] : ACTIVITY_ICONS[a.sport_type] ?? "•";
+    return { from, to: from + a.elapsed_time / 60, short: mark, label: workout?.region ?? SPORT_NAMES[a.sport_type] ?? a.sport_type };
+  });
+  // Strava and Motra write their workouts to Apple Health too, those are already in the list.
+  const watch = (state.dayExtra?.exercise ?? []).filter((e) => !/strava|motra/i.test(e.source ?? "")).map((e) => {
+    const from = minuteOf(e.start_time);
+    return { from, to: from + e.duration_seconds / 60, short: EXERCISE_MARKS[e.type] ?? "•", label: e.type === "walking" ? "Chôdza" : SPORT_NAMES[e.type] ?? e.type };
+  }).filter((e) => !strava.some((a) => Math.abs(a.from - e.from) < 15));
+  const meals = (state.dayExtra?.food ?? []).map((f) => ({ at: minuteOf(f.start_time), label: "🍽", name: f.name ?? "Jedlo", calories: f.calories }));
+  return { regions: [...strava, ...watch].sort((a, b) => a.from - b.from), meals: meals.sort((a, b) => a.at - b.at) };
+}
+const dayTicks = () => [0, 6, 12, 18, 24].map((t) => ({ v: t * 60, label: `${t}:00`, anchor: t === 0 ? "start" : t === 24 ? "end" : "middle" }));
 function dayCard() {
   const card = h("section", { class: "card" });
   const buckets = dayBuckets(state.dayDoc);
-  const head = h("div", {},
-    h("h2", { text: `Tep cez deň, ${fullDate(state.day)}` }));
-  card.append(h("div", { class: "card-head" }, head,
-    buckets.length ? legend([{ kind: "line", color: "var(--hr)", label: "5-min. priemer" }, { color: "var(--hr)", label: "rozsah min–max", opacity: 0.25 }]) : null));
+  const { regions, meals } = dayEvents();
+  const markers = meals.map((m) => ({ at: m.at, label: m.label }));
+  const head = h("div", {}, h("h2", { text: `Deň, ${fullDate(state.day)}` }));
+  card.append(h("div", { class: "card-head" }, head));
   if (!buckets.length) { card.append(h("div", { class: "empty", text: "Pre tento deň nie sú dáta o tepe." })); return card; }
 
   const avg = mean(buckets.map((b) => b.avg));
   const lo = Math.min(...buckets.map((b) => b.lo)), hi = Math.max(...buckets.map((b) => b.hi));
-  head.append(h("p", { class: "note keep", text: `Priemer ${num(avg)} bpm, rozsah ${lo}–${hi} bpm` }));
+  head.append(h("p", { class: "note keep", text: `Tep priemer ${num(avg)} bpm, ${lo}–${hi} bpm` }));
   const lastBucket = buckets[buckets.length - 1];
   head.after(h("div", { class: "latest" }, h("b", { text: `${num(lastBucket.avg)} bpm` }), h("span", { text: clock(lastBucket.minute) })));
+  const regionAt = (minute) => regions.find((w) => minute >= w.from - 5 && minute <= w.to);
 
-  const regions = state.trend.strava.filter((a) => a.start_date_local.slice(0, 10) === state.day).map((a) => {
-    const start = new Date(a.start_date);
-    const from = start.getHours() * 60 + start.getMinutes();
-    return { from, to: from + a.elapsed_time / 60, label: SPORT_NAMES[a.sport_type] ?? a.sport_type, name: a.name };
-  });
-  const chart = h("div", { class: "chart" });
-  card.append(chart);
-  chart.draw = () => lineChart(chart, {
-    x: buckets.map((b) => b.minute), xMin: 0, xMax: 1440, gap: 30, regions,
-    xTicks: [0, 6, 12, 18, 24].map((t) => ({ v: t * 60, label: `${t}:00`, anchor: t === 0 ? "start" : t === 24 ? "end" : "middle" })),
+  const heart = h("div", { class: "chart" });
+  heart.draw = () => lineChart(heart, {
+    height: 190, x: buckets.map((b) => b.minute), xMin: 0, xMax: 1440, gap: 30, regions, markers, xTicks: dayTicks(),
     series: [{ color: "var(--hr)", values: buckets.map((b) => b.avg) }],
     band: { color: "var(--hr)", lo: buckets.map((b) => b.lo), hi: buckets.map((b) => b.hi) },
-    label: `Tep počas dňa, rozsah ${lo} až ${hi} úderov za minútu`,
+    label: `Tep počas dňa, ${lo} až ${hi} úderov za minútu`,
     read: (i) => {
-      const b = buckets[i];
-      const r = regions.find((w) => b.minute >= w.from - 5 && b.minute <= w.to);
-      return { title: r ? `${clock(b.minute)} · ${r.name}` : clock(b.minute),
-        rows: [{ color: "var(--hr)", value: `${num(b.avg)} bpm`, label: `${b.lo}–${b.hi}` }] };
+      const b = buckets[i], r = regionAt(b.minute);
+      return { title: r ? `${clock(b.minute)} · ${r.short} ${r.label}` : clock(b.minute), rows: [{ color: "var(--hr)", value: `${num(b.avg)} bpm`, label: `${b.lo}–${b.hi}` }] };
     },
   });
-  const hourly = Array.from({ length: 24 }, (_, hour) => buckets.filter((b) => Math.floor(b.minute / 60) === hour))
-    .map((list, hour) => list.length ? [`${hour}:00`, num(mean(list.map((b) => b.avg))), String(Math.min(...list.map((b) => b.lo))), String(Math.max(...list.map((b) => b.hi)))] : null)
-    .filter(Boolean);
-  card.append(table([{ label: "Hodina" }, { label: "Priemer", num: true }, { label: "Min", num: true }, { label: "Max", num: true }], hourly));
+  card.append(h("div", { class: "day-label" }, h("i", { style: "background:var(--hr)" }), "Tep"), heart);
+
+  const hrvPoints = Object.entries(state.dayExtra?.hrv ?? {}).filter(([time]) => localDay(new Date(time)) === state.day)
+    .map(([time, [value]]) => ({ minute: minuteOf(time), value })).sort((a, b) => a.minute - b.minute);
+  if (hrvPoints.length) {
+    const chart = h("div", { class: "chart" });
+    chart.draw = () => lineChart(chart, {
+      height: 120, x: hrvPoints.map((p) => p.minute), xMin: 0, xMax: 1440, regions, markers, xTicks: dayTicks(),
+      series: [{ color: "var(--hrv)", values: hrvPoints.map((p) => p.value), dots: true }],
+      label: "HRV počas dňa",
+      read: (i) => {
+        const p = hrvPoints[i], r = regionAt(p.minute);
+        return { title: r ? `${clock(p.minute)} · ${r.short} ${r.label}` : clock(p.minute), rows: [{ color: "var(--hrv)", value: `${num(p.value)} ms`, label: "HRV" }] };
+      },
+    });
+    card.append(h("div", { class: "day-label" }, h("i", { style: "background:var(--hrv)" }), `HRV · ${hrvPoints.length}× meranie`), chart);
+  }
+
+  const stepSamples = state.dayExtra?.steps;
+  const hours = Array(24).fill(0);
+  for (const [start, count] of Object.values(stepSamples ?? {})) {
+    if (localDay(new Date(start)) === state.day) hours[new Date(start).getHours()] += count;
+  }
+  if (stepSamples) {
+    const bars = hours.map((count, hour) => ({ tick: `${hour}:00`, title: `${hour}:00–${hour + 1}:00`, total: count, parts: [{ color: "var(--ride)", label: "krokov", value: count }] }));
+    const chart = h("div", { class: "chart" });
+    chart.draw = () => barChart(chart, { height: 110, bars, label: "Kroky po hodinách", format: (v) => `${num(v)} krokov` });
+    card.append(h("div", { class: "day-label" }, h("i", { style: "background:var(--ride)" }), `Kroky po hodinách · ${num(hours.reduce((a, b) => a + b, 0))}`), chart);
+  } else {
+    card.append(h("p", { class: "note keep", text: "Kroky po hodinách sa ukladajú od 3. 11. 2026." }));
+  }
+
+  const timeline = [
+    ...regions.map((r) => ({ at: r.from, text: `${clock(Math.round(r.from))}–${clock(Math.round(Math.min(r.to, 1439)))}`, label: `${r.short} ${r.label}` })),
+    ...meals.map((m) => ({ at: m.at, text: clock(m.at), label: `🍽 ${m.name}${m.calories ? ` · ${num(m.calories)} kcal` : ""}` })),
+  ].sort((a, b) => a.at - b.at);
+  if (timeline.length) {
+    card.append(h("div", { class: "timeline" }, ...timeline.map((t) => h("div", { class: "timeline-row" }, h("span", { class: "time", text: t.text }), h("span", { text: t.label })))));
+  }
+
+  const hourly = Array.from({ length: 24 }, (_, hour) => {
+    const list = buckets.filter((b) => Math.floor(b.minute / 60) === hour);
+    const hrv = hrvPoints.filter((p) => Math.floor(p.minute / 60) === hour);
+    if (!list.length && !hrv.length && !hours[hour]) return null;
+    return [`${hour}:00`, list.length ? num(mean(list.map((b) => b.avg))) : "–", hrv.length ? num(mean(hrv.map((p) => p.value))) : "–", hours[hour] ? num(hours[hour]) : "–"];
+  }).filter(Boolean);
+  card.append(table([{ label: "Hodina" }, { label: "Tep", num: true }, { label: "HRV", num: true }, { label: "Kroky", num: true }], hourly));
   return card;
 }
 function dayName(day) {
