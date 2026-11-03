@@ -341,6 +341,14 @@ h2 { font-size: 16px; }
 .timeline { margin-top: 12px; border-top: 1px solid var(--grid); padding-top: 8px; }
 .timeline-row { display: flex; gap: 12px; padding: 4px 0; font-size: 13.5px; }
 .timeline-row .time { flex: none; width: 92px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.body-metric { display: flex; flex-direction: column; gap: 2px; text-align: left; font: inherit; color: inherit; cursor: pointer; padding: 12px 13px 10px; }
+.body-metric[aria-expanded=true] { border-color: var(--hrv); box-shadow: inset 0 0 0 1px var(--hrv); }
+.body-metric .label { color: var(--ink-2); font-size: 13px; display: flex; justify-content: space-between; }
+.body-metric .value { font-size: 26px; font-weight: 650; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.body-metric .value small { font-size: 13px; font-weight: 500; color: var(--ink-2); margin-left: 3px; }
+.body-metric .delta { color: var(--ink-2); font-size: 12px; }
+.body-metric svg { display: block; width: 100%; height: 34px; margin-top: 6px; overflow: visible; }
 .latest { flex: none; text-align: right; }
 .latest b { display: block; font-size: 22px; font-weight: 680; line-height: 1.15; }
 .latest span { color: var(--ink-2); font-size: 12px; }
@@ -513,7 +521,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "" };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -2979,11 +2987,51 @@ function overviewNav(page) {
   const link = (id, href, label) => h("a", { href, "aria-current": String(page === id), text: label });
   return h("div", { class: "seg subnav", role: "group", "aria-label": "Prehľad" }, link("prehlad", "#/", "Dnes"), link("telo", "#/telo", "Telo"), link("aktivita", "#/aktivita", "Aktivita"));
 }
+// Body measures as tiles with a small trend, the full chart opens under them on a tap.
+function bodyMetrics() {
+  const { from } = periods();
+  const series = (rows, value) => rows.filter((d) => d.day >= from && value(d) != null).map((d) => ({ day: d.day, value: value(d) }));
+  return [
+    { id: "recovery", label: "Recovery", points: series(state.recovery, (d) => d.score), digits: 0, unit: "", color: "var(--hrv)", card: recoveryCard },
+    { id: "readiness", label: "Pripravenosť", points: series(state.readiness, (d) => d.score), digits: 0, unit: "", color: "var(--hrv)", card: readinessCard },
+    { id: "hrv", label: "HRV", points: series(state.trend.hrv, (d) => d.avg), digits: 0, unit: "ms", color: "var(--hrv)", card: hrvCard },
+    { id: "rest", label: "Pokojový tep", points: series(state.rest, (d) => d.bpm), digits: 0, unit: "bpm", color: "var(--hr)", card: restCard },
+    { id: "weight", label: "Hmotnosť", points: series(state.weight, (d) => d.kilograms), digits: 1, unit: "kg", color: "var(--ride)",
+      card: () => measureCard("Hmotnosť", weightNote(), state.weight, "kilograms", 1, "kg", "var(--ride)") },
+    { id: "vo2", label: "VO2 Max", points: series(state.vo2, (d) => d.vo2_ml_per_min_per_kg), digits: 1, unit: "ml/kg/min", color: "var(--strength)",
+      card: () => measureCard("VO2 Max", "Kondícia podľa Apple Watch", state.vo2, "vo2_ml_per_min_per_kg", 1, "ml/kg/min", "var(--strength)") },
+  ];
+}
+function sparkline(points, color) {
+  const values = points.map((p) => p.value);
+  const lo = Math.min(...values), hi = Math.max(...values), span = hi - lo || 1;
+  const days = Math.max(daysBetween(points[0].day, points[points.length - 1].day), 1);
+  const xy = points.map((p) => [(daysBetween(points[0].day, p.day) / days) * 100, 30 - ((p.value - lo) / span) * 28]);
+  const last = xy[xy.length - 1];
+  return s("svg", { viewBox: "0 0 100 31", preserveAspectRatio: "none", "aria-hidden": "true" },
+    s("polyline", { points: xy.map((p) => p.join(",")).join(" "), fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke" }),
+    s("line", { x1: last[0], x2: last[0] + 0.01, y1: last[1], y2: last[1], stroke: color, "stroke-width": 7, "stroke-linecap": "round", "vector-effect": "non-scaling-stroke" }));
+}
+function metricTile(metric) {
+  const open = state.bodyOpen === metric.id;
+  const tile = h("button", { class: "tile body-metric", type: "button", "aria-expanded": String(open),
+    onclick: () => { state.bodyOpen = open ? null : metric.id; render(); } });
+  const { points } = metric;
+  tile.append(h("div", { class: "label" }, h("span", { text: metric.label }), h("span", { "aria-hidden": "true", text: open ? "▴" : "▾" })));
+  if (!points.length) return tile.append(h("div", { class: "delta", text: "V tomto období nie sú dáta." })), tile;
+  const last = points[points.length - 1];
+  const average = mean(points.map((p) => p.value));
+  const diff = Number((last.value - average).toFixed(metric.digits));
+  tile.append(h("div", { class: "value" }, num(last.value, metric.digits), metric.unit ? h("small", { text: metric.unit }) : null),
+    h("div", { class: "delta", text: `${dayName(last.day)} · ${diff ? `${diff > 0 ? "↑" : "↓"} ${num(Math.abs(diff), metric.digits)} oproti priemeru` : "ako priemer"}` }));
+  if (points.length >= 2) tile.append(sparkline(points, metric.color));
+  return tile;
+}
 function overviewView(page) {
   if (page === "telo") {
-    return [overviewNav(page), filters(), h("div", { class: "grid2" }, recoveryCard(), readinessCard()), dayCard(), h("div", { class: "grid2" }, hrvCard(), restCard()),
-      h("div", { class: "grid2" }, measureCard("Hmotnosť", weightNote(), state.weight, "kilograms", 1, "kg", "var(--ride)"),
-        measureCard("VO2 Max", "Kondícia podľa Apple Watch", state.vo2, "vo2_ml_per_min_per_kg", 1, "ml/kg/min", "var(--strength)"))];
+    const metrics = bodyMetrics();
+    const open = metrics.find((m) => m.id === state.bodyOpen);
+    return [overviewNav(page), filters(), h("div", { class: "metrics" }, ...metrics.map(metricTile)), open ? open.card() : null, dayCard()].filter(Boolean);
   }
   if (page === "aktivita") {
     return [overviewNav(page), filters(), tiles(3, 6), h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")), loadCard()];
