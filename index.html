@@ -454,6 +454,10 @@ const REST_SPEED_SHARE = 0.6;
 const SWIM_LAP_SHARE = [0.85, 1.3];
 // Slower than this share of the usual pace is a swim mixed with waiting, kept out of sets.
 const SLOW_SWIM_SHARE = 1.5;
+// While swimming the watch samples every few seconds, a longer gap is a rest.
+const SWIM_SAMPLE_GAP = 11;
+const SWIM_SAMPLE_STEP = 3;
+const MIN_SWIM_REST = 5;
 const MIN_SET_REPEATS = 3;
 const ROLLING_ACTIVITIES = 5;
 // Scarf's rule: a metre of climbing costs a runner about as much as 7.92 metres on the flat.
@@ -1512,6 +1516,8 @@ function swimSummary(detail) {
   const laps = detail.laps ?? [];
   const noSamples = (lap) => lap.start_index === lap.end_index;
   const marked = laps.filter(noSamples).length > laps.length * 0.2;
+  // Only the newer format stops sampling during a rest.
+  if (marked && detail.stream?.length) return streamSwimSummary(detail);
   const speeds = laps.filter((lap) => lap.distance > 0).map((lap) => lap.average_speed).sort((a, b) => b - a);
   const fast = speeds[speeds.length >> 2] ?? 0;
   const usualSwim = median(laps.filter((lap) => lap.distance && !noSamples(lap)).map((lap) => lap.elapsed_time)) ?? 0;
@@ -1565,6 +1571,65 @@ function swimSummary(detail) {
   return {
     id: String(detail.id), day: detail.start_date_local.slice(0, 10), name: detail.name, distance: detail.distance, elapsed: detail.elapsed_time,
     pace, swimSeconds, restSeconds: Math.max(detail.elapsed_time - swimSeconds, 0), reliable: marked || hasMovingTime, sets: repeated, otherDistance: Math.max(detail.distance - inSets, 0),
+  };
+}
+// The distance stream grows at the end of every pool length, so it times each length even when
+// the workout changes. The watch takes no samples while resting: a long gap between samples
+// inside a length is the rest before it. A length the watch took no samples in is timed only by
+// its ends, there the time well beyond a usual length is rest.
+function streamSwimSummary(detail) {
+  const stream = detail.stream;
+  const lengths = [];
+  for (let i = 1, from = null, start = 0; i < stream.length; i++) {
+    if (stream[i][1] <= stream[i - 1][1]) continue;
+    let gap = 0;
+    for (let j = start + 1; j <= i; j++) gap = Math.max(gap, stream[j][0] - stream[j - 1][0]);
+    lengths.push({ distance: stream[i][1] - stream[i - 1][1], time: from == null ? null : stream[i][0] - from, gap });
+    from = stream[i][0];
+    start = i;
+  }
+  const sampled = (l) => l.time != null && l.gap < l.time - 1;
+  const usual = median(lengths.filter((l) => sampled(l) && l.gap <= SWIM_SAMPLE_GAP).map((l) => l.time / l.distance)) ?? 0;
+  const intervals = [];
+  for (const length of lengths) {
+    const expected = usual * length.distance;
+    const time = length.time ?? expected;
+    // Samples thin out on some lengths, so a gap alone can be part of the swim too.
+    const rest = sampled(length)
+      ? (length.gap > SWIM_SAMPLE_GAP ? Math.min(length.gap - SWIM_SAMPLE_STEP, time - expected) : 0)
+      : (time - expected >= expected / 2 ? time - expected : 0);
+    const last = intervals[intervals.length - 1];
+    if (last && rest >= MIN_SWIM_REST) last.rest = rest;
+    const current = !last || rest >= MIN_SWIM_REST ? (intervals.push({ distance: 0, swim: 0, rest: 0 }), intervals[intervals.length - 1]) : last;
+    current.distance += length.distance;
+    current.swim += rest >= MIN_SWIM_REST ? time - rest : time;
+  }
+
+  const blocks = [];
+  for (const interval of intervals) {
+    const last = blocks[blocks.length - 1];
+    if (last?.distance === interval.distance) last.items.push(interval);
+    else blocks.push({ distance: interval.distance, items: [interval] });
+  }
+  const shown = blocks.flatMap((block) => {
+    if (block.items.length < MIN_SET_REPEATS) return block.items.map((i) => ({ repeats: 1, distance: i.distance, swim: i.swim, rest: i.rest, longRests: [] }));
+    const between = block.items.slice(0, -1);
+    const rest = median(between.map((i) => i.rest));
+    const usualRests = between.filter((i) => i.rest <= Math.max(rest * 2, 60));
+    return [{
+      repeats: block.items.length, distance: block.distance, swim: median(block.items.map((i) => i.swim)), rest,
+      cycle: rest && usualRests.length ? median(usualRests.map((i) => i.swim + i.rest)) : null,
+      longRests: between.filter((i) => !usualRests.includes(i)).map((i) => i.rest),
+    }];
+  });
+  const distance = stream[stream.length - 1][1];
+  const swimSeconds = intervals.reduce((sum, i) => sum + i.swim, 0);
+  const sets = shown.filter((set) => set.repeats >= MIN_SET_REPEATS);
+  const inSets = sets.reduce((sum, set) => sum + set.repeats * set.distance, 0);
+  return {
+    id: String(detail.id), day: detail.start_date_local.slice(0, 10), name: detail.name, distance, elapsed: detail.elapsed_time,
+    pace: distance ? (swimSeconds / distance) * 100 : null, swimSeconds, restSeconds: Math.max(detail.elapsed_time - swimSeconds, 0),
+    reliable: true, sets, blocks: shown, otherDistance: Math.max(distance - inSets, 0),
   };
 }
 function sportActivities(sport) {
@@ -2213,20 +2278,25 @@ function activityCard(sport, a) {
 }
 function swimCard(swim) {
   const card = h("section", { class: "card" }, h("h2", { text: `Série, ${fullDate(swim.day)}` }),
-    h("p", { class: "note", text: swim.reliable ? "Série a pauzy rozpoznané z kôl Apple Watch." : "Starší formát záznamu, tempo aj série sú len odhad." }),
+    h("p", { class: "note", text: swim.blocks ? "Úseky a pauzy z dĺžok bazéna, ktoré zaznamenali hodinky." : swim.reliable ? "Série a pauzy rozpoznané z kôl Apple Watch." : "Starší formát záznamu, tempo aj série sú len odhad." }),
     h("div", { class: "facts" },
       fact("Vzdialenosť", num(swim.distance), "m"),
       fact("Plávanie", hours(swim.swimSeconds)),
       fact("Pauzy", hours(swim.restSeconds)),
       fact("Tempo", swim.pace == null ? "–" : `${clockShort(swim.pace)} /100 m`)),
     aiBlock("activity", swim.id, "Zhodnotiť tréning"));
-  for (const set of swim.sets) {
+  // A single swim shows the rest after it, a set the usual rest between its repeats.
+  for (const set of swim.blocks ?? swim.sets) {
+    const single = set.repeats === 1;
+    const sub = single
+      ? [set.rest ? `potom pauza ${clockShort(set.rest)}` : ""]
+      : [set.rest ? `pauza ${clockShort(set.rest)}` : "bez pauzy", set.longRests.length ? `dlhšie pauzy ${set.longRests.map(clockShort).join(", ")}` : ""];
     card.append(h("div", { class: "record" },
-      h("div", { class: "main" }, h("div", { class: "title", text: `${set.repeats} × ${set.distance} m${set.cycle ? ` na ${clockShort(set.cycle)}` : ""}` }),
-        h("div", { class: "sub", text: [set.rest ? `pauza ${clockShort(set.rest)}` : "bez pauzy",
-          set.longRests.length ? `dlhšie pauzy ${set.longRests.map(clockShort).join(", ")}` : ""].filter(Boolean).join(" · ") })),
+      h("div", { class: "main" }, h("div", { class: "title", text: single ? `${set.distance} m` : `${set.repeats} × ${set.distance} m${set.cycle ? ` na ${clockShort(set.cycle)}` : ""}` }),
+        h("div", { class: "sub", text: sub.filter(Boolean).join(" · ") })),
       h("div", { class: "value" }, clockShort(set.swim), h("small", { text: `${clockShort((set.swim / set.distance) * 100)} /100 m` }))));
   }
+  if (swim.blocks) return card;
   if (!swim.sets.length) card.append(h("p", { class: "note", text: `Bez opakovaných sérií od ${MIN_SET_REPEATS} opakovaní.` }));
   if (swim.otherDistance) card.append(h("p", { class: "hint", text: `Mimo sérií ${num(swim.otherDistance)} m, napríklad rozplávanie a voľné dĺžky.` }));
   return card;
