@@ -1609,6 +1609,90 @@ function calendarView() {
   const backdrop = picked ? h("div", { class: "sheet-backdrop", onclick: closeDaySheet }) : null;
   return [h("div", { class: "calendar" }, h("div", {}, main, header), dayPanel(selected, days.get(selected), { sheet: Boolean(picked), opening })), backdrop].filter(Boolean);
 }
+// Strength index: every exercise starts at 100 on its first session and follows its estimated 1RM
+// from session to session. A jump of more than 30 % between two sessions is another machine or a
+// logging slip, the index carries on from where it was instead. On a day an exercise counts with its
+// best of the last six weeks, and the index is the median of all exercises done regularly, so one odd
+// exercise cannot pull it. Upper and lower body and each muscle group are medians of their exercises.
+const INDEX_WINDOW_DAYS = 42;
+const INDEX_MIN_SESSIONS = 4;
+const INDEX_MIN_EXERCISES = 3;
+const INDEX_JUMP = 1 + SUSPICIOUS_CHANGE / 100;
+const UPPER_MUSCLES = new Set(["Triceps", "Biceps", "Ramená", "Chrbát", "Hrudník"]);
+function strengthIndex(index) {
+  const exercises = [];
+  for (const entry of index.values()) {
+    const best = new Map();
+    for (const p of entry.sessions) if (p.orm > 0) best.set(p.workout.day, Math.max(best.get(p.workout.day) ?? 0, p.orm));
+    const days = [...best.keys()].sort();
+    if (days.length < INDEX_MIN_SESSIONS) continue;
+    let value = 100, previous = best.get(days[0]);
+    const points = days.map((day, i) => {
+      const orm = best.get(day);
+      if (i) {
+        const ratio = orm / previous;
+        if (ratio <= INDEX_JUMP && ratio >= 1 / INDEX_JUMP) value *= ratio;
+        previous = orm;
+      }
+      return { day, value };
+    });
+    const muscle = muscleOf(entry.name);
+    exercises.push({ name: entry.name, muscle, region: muscle === "Nohy" ? "lower" : UPPER_MUSCLES.has(muscle) ? "upper" : null, points });
+  }
+  const at = (list, day) => {
+    const since = addDays(day, -INDEX_WINDOW_DAYS);
+    const values = list.map((e) => Math.max(-Infinity, ...e.points.filter((p) => p.day > since && p.day <= day).map((p) => p.value))).filter(Number.isFinite);
+    return values.length >= INDEX_MIN_EXERCISES ? median(values) : null;
+  };
+  const first = exercises.flatMap((e) => e.points.map((p) => p.day)).sort()[0];
+  if (!first) return null;
+  const today = localDay(new Date());
+  const days = [];
+  for (let day = first; day < today; day = addDays(day, 7)) days.push(day);
+  days.push(today);
+  const groups = { all: exercises, upper: exercises.filter((e) => e.region === "upper"), lower: exercises.filter((e) => e.region === "lower") };
+  const series = days.map((day) => ({ day, all: at(groups.all, day), upper: at(groups.upper, day), lower: at(groups.lower, day) }));
+  const ago = addDays(today, -28);
+  const muscles = MUSCLES.map(([name]) => {
+    const list = exercises.filter((e) => e.muscle === name);
+    const pick = (day) => { const since = addDays(day, -INDEX_WINDOW_DAYS); const v = list.map((e) => Math.max(-Infinity, ...e.points.filter((p) => p.day > since && p.day <= day).map((p) => p.value))).filter(Number.isFinite); return v.length ? median(v) : null; };
+    return { name, now: pick(today), before: pick(ago), count: list.length };
+  }).filter((m) => m.now != null).sort((a, b) => b.now - a.now);
+  return { series, muscles, exercises: exercises.length, now: at(groups.all, today), before: at(groups.all, ago) };
+}
+function strengthIndexCard(index) {
+  const result = strengthIndex(index);
+  const card = h("section", { class: "card" });
+  if (!result?.now) return card.append(h("h2", { text: "Silový index" }), h("div", { class: "empty", text: "Zatiaľ málo tréningov na index." })), card;
+  const change = result.before ? result.now - result.before : null;
+  const signedNum = (v) => { const r = Math.round(v); return `${r > 0 ? "+" : r < 0 ? "−" : ""}${num(Math.abs(r))}`; };
+  card.append(h("div", { class: "card-head" },
+    h("div", {}, h("h2", { text: "Silový index" }),
+      h("p", { class: "note", text: `100 je tvoja úroveň pri prvom tréningu každého cviku. Každý cvik sa ráta najlepším odhadom 1RM za 6 týždňov, index je medián z ${result.exercises} cvikov, ktoré robíš pravidelne. Skok nad ${SUSPICIOUS_CHANGE} % medzi dvoma tréningmi je iný stroj a nepočíta sa ako zlepšenie.` })),
+    h("div", { class: "latest" }, h("b", { text: num(result.now) }), h("span", { text: change == null ? "dnes" : `${signedNum(change)} za 4 týždne` }))));
+  const list = result.series;
+  const start = list[0].day, today = list[list.length - 1].day;
+  const chart = h("div", { class: "chart" });
+  const lines = [["all", "celkovo", "var(--hrv)"], ["upper", "horná časť", "var(--ride)"], ["lower", "spodná časť", "var(--run)"]];
+  chart.draw = () => lineChart(chart, {
+    height: 200, x: list.map((d) => daysBetween(start, d.day)), xMin: 0, xMax: daysBetween(start, today), xTicks: dateAxis(start, today),
+    series: lines.map(([key, , color]) => ({ color, values: list.map((d) => d[key]) })),
+    label: "Silový index v čase",
+    read: (i) => ({ title: `Týždeň ${fullDate(list[i].day)}`, rows: lines.filter(([key]) => list[i][key] != null).map(([key, label, color]) => ({ color, value: num(list[i][key]), label })) }),
+  });
+  const scale = Math.max(120, ...result.muscles.map((m) => m.now)) * 1.05;
+  card.append(legend(lines.map(([, label, color]) => ({ kind: "line", color, label }))), chart,
+    h("div", { class: "group-head", text: "Podľa partie" }),
+    ...result.muscles.map((m) => h("div", { class: "muscle" },
+      h("span", { text: m.name }),
+      h("div", { class: "track", role: "img", "aria-label": `${m.name}: index ${num(m.now)}` },
+        Object.assign(h("i"), { style: `width:${(m.now / scale) * 100}%` }),
+        Object.assign(h("u"), { style: `left:${(100 / scale) * 100}%` })),
+      h("span", { class: "value" }, h("b", { text: num(m.now) }), m.before != null ? ` ${signedNum(m.now - m.before)}` : ""))),
+    table([{ label: "Týždeň" }, ...lines.map(([, label]) => ({ label, num: true }))],
+      list.slice().reverse().map((d) => [fullDate(d.day), ...lines.map(([key]) => (d[key] == null ? "–" : num(d[key])))])));
+  return card;
+}
 function progressView(index) {
   const { rows, skipped } = exerciseTrends(index);
   const odd = rows.filter((r) => Math.abs(r.change) > SUSPICIOUS_CHANGE);
@@ -1618,7 +1702,8 @@ function progressView(index) {
   const flat = real.filter((r) => Math.abs(r.change) < TREND_THRESHOLD).sort((a, b) => b.weeksFlat - a.weeksFlat);
   return [
     aiBlock("strength", null, "Zhodnotiť progres"),
-        h("div", { class: "grid3" },
+    strengthIndexCard(index),
+    h("div", { class: "grid3" },
       trendGroup("Rastie", `O ${num(TREND_THRESHOLD, 1)} % a viac`, up),
       trendGroup("Stojí", `Zmena do ${num(TREND_THRESHOLD, 1)} %`, flat, true),
       trendGroup("Klesá", `O ${num(TREND_THRESHOLD, 1)} % a viac`, down, true)),
@@ -3189,7 +3274,7 @@ function fitnessCard() {
   const start = list[0].day;
   const x = list.map((d) => daysBetween(start, d.day));
   const axis = { x, xMin: 0, xMax: daysBetween(start, today), xTicks: dateAxis(start, today) };
-  const signedNum = (v) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${num(Math.abs(v))}`;
+  const signedNum = (v) => { const r = Math.round(v); return `${r > 0 ? "+" : r < 0 ? "−" : ""}${num(Math.abs(r))}`; };
   card.append(h("div", { class: "card-head" },
     h("div", {}, h("h2", { text: "Kondícia a forma" }), h("p", { class: "note", text: "Ako Fitness & Freshness v Strave: kondícia je námaha za 6 týždňov, únava za 7 dní, forma je ich rozdiel." })),
     h("div", { class: "latest" }, h("b", { text: num(now.fitness) }), h("span", { text: "kondícia dnes" }))),
