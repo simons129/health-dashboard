@@ -2062,11 +2062,27 @@ function threadView(root) {
   if (error) box.append(error);
   return box;
 }
+// A swim's sets as the dashboard reads them, so an evaluation sees the same workout as the card.
+function swimDetails(swim) {
+  const part = (p) => p.pause ? { longPause: clockShort(p.pause) } : {
+    repeats: p.repeats, distanceMeters: p.distance, ...(p.mixed ? { freeParts: p.items.map((i) => i.distance) } : {}),
+    swimTime: clockShort(p.swim), pacePer100m: clockShort((p.swim / p.distance) * 100),
+    ...(p.repeats > 1 && !p.mixed ? { restBetween: clockShort(p.rest), sendOff: p.cycle ? clockShort(p.cycle) : null } : {}),
+    ...(p.restAfter ? { restAfter: clockShort(p.restAfter) } : {}),
+  };
+  return { swim: {
+    distanceMeters: swim.distance, swimMinutes: Math.round(swim.swimSeconds / 60), restMinutes: Math.round(swim.restSeconds / 60),
+    pacePer100m: swim.pace == null ? null : clockShort(swim.pace),
+    note: swim.parts ? "Úseky z dĺžok bazéna, dlhá pauza ukončuje sériu." : "Starší záznam, série sú odhad.",
+    parts: swim.parts ? swim.parts.map(part) : swim.sets.map((set) => ({ repeats: set.repeats, distanceMeters: set.distance, swimTime: clockShort(set.swim), restBetween: clockShort(set.rest) })),
+  } };
+}
 function aiBlock(kind, ref, label) {
   const key = aiKey(kind, ref);
   const record = state.ai.find((item) => aiKey(item.kind, item.ref) === key && item.status !== "failed");
   const box = h("div", { class: "ai" });
-  const button = (text) => h("button", { text, onclick: () => askAi({ kind, ref }, key) });
+  const details = kind === "activity" && state.swims.get(ref) ? swimDetails(state.swims.get(ref)) : undefined;
+  const button = (text) => h("button", { text, onclick: () => askAi({ kind, ref, details }, key) });
   if (isWaiting(record)) box.append(waitingNote());
   else if (record?.status === "done") box.append(h("div", { class: "ai-text", text: record.answer }), threadView(record), h("div", { class: "week-actions" }, button("Znova")));
   else box.append(button(label));
