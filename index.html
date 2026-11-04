@@ -321,6 +321,15 @@ h2 { font-size: 16px; }
 .login .note { display: block !important; }
 .info { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; min-height: 0; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 15px; }
 .card.has-info .card-head { padding-right: 26px; }
+/* The table behind a chart opens from a small icon in the card's corner, beside the info one. */
+details.table-fold > summary { display: none; }
+details.table-fold[open] { margin-top: 8px; }
+.table-toggle { position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; min-height: 0; padding: 5px; border: 0; border-radius: 50%; background: none; color: var(--muted); }
+.table-toggle svg { display: block; width: 100%; height: 100%; }
+.table-toggle[aria-pressed=true] { color: var(--hrv); background: var(--wash); }
+.card.has-info .table-toggle { right: 40px; }
+.card.has-table .card-head { padding-right: 30px; }
+.card.has-info.has-table .card-head { padding-right: 62px; }
 .hero { color: #fff; background: linear-gradient(135deg, #1e2952, #0f766e); --ring-good: #4ade80; --ring-warning: #fbbf24; --ring-critical: #f87171; --ring-track: rgba(255,255,255,.18); }
 .hero .summary { margin: 14px 0 0; font-size: 15px; line-height: 1.45; }
 .hero .summary.stale { opacity: .65; }
@@ -1031,7 +1040,7 @@ function legend(items) {
 }
 function table(columns, rows) {
   const align = (c) => (c.num ? { class: "num" } : {});
-  return h("details", {}, h("summary", { text: "Zobraziť tabuľku" }), h("div", { class: "scroll" }, h("table", {},
+  return h("details", { class: "table-fold" }, h("summary", { text: "Tabuľka" }), h("div", { class: "scroll" }, h("table", {},
     h("thead", {}, h("tr", {}, ...columns.map((c) => h("th", { ...align(c), text: c.label })))),
     h("tbody", {}, ...rows.map((row) => h("tr", {}, ...row.map((v, i) => h("td", { ...align(columns[i]), text: v }))))))));
 }
@@ -1241,6 +1250,15 @@ function goalDots(label, done, goal) {
 }
 function enhance() {
   for (const card of app.querySelectorAll(".card")) {
+    const fold = card.querySelector("details.table-fold");
+    if (fold && !card.querySelector(":scope > .table-toggle")) {
+      card.classList.add("has-table");
+      const icon = s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "aria-hidden": "true" },
+        s("rect", { x: 3.5, y: 4.5, width: 17, height: 15, rx: 2 }), s("path", { d: "M3.5 9.5h17M3.5 14.5h17M9.5 9.5v10" }));
+      const button = h("button", { class: "table-toggle", type: "button", "aria-label": "Tabuľka hodnôt", "aria-pressed": "false",
+        onclick: () => { fold.open = !fold.open; button.setAttribute("aria-pressed", String(fold.open)); } }, icon);
+      card.append(button);
+    }
     if (card.querySelector(":scope > .note:not(.keep), :scope > .hint, :scope > .card-head .note:not(.keep)")) {
       card.classList.add("has-info");
       card.append(h("button", { class: "info", text: "ⓘ", "aria-label": "Vysvetlenie", onclick: () => card.classList.toggle("show-info") }));
