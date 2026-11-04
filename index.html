@@ -348,6 +348,7 @@ h2 { font-size: 16px; }
 .body-metric .value { font-size: 26px; font-weight: 650; line-height: 1.15; font-variant-numeric: tabular-nums; }
 .body-metric .value small { font-size: 13px; font-weight: 500; color: var(--ink-2); margin-left: 3px; }
 .body-metric .delta { color: var(--ink-2); font-size: 12px; }
+.body-metric .delta i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
 .body-metric svg { display: block; width: 100%; height: 34px; margin-top: 6px; overflow: visible; }
 .latest { flex: none; text-align: right; }
 .latest b { display: block; font-size: 22px; font-weight: 680; line-height: 1.15; }
@@ -464,6 +465,10 @@ const RELOAD_GAP_MS = 60 * 1000;
 const SYNC_POLLS = 12;
 const SYNC_POLL_MS = 5000;
 const TIP_LINGER_MS = 1500;
+// Your normal range on a day is the mean ± one standard deviation of the days before it.
+const NORMAL_DAYS = 60;
+const MIN_NORMAL_POINTS = 14;
+const SCORE_ZONES = [{ from: 0, to: 33, color: "var(--critical)" }, { from: 33, to: 67, color: "var(--warning)" }, { from: 67, to: 100, color: "var(--good)" }];
 const MIN_TREND_POINTS = 3;
 // Below this a 100 m pace is a lap the watch cut wrong, not real swimming.
 const FASTEST_PACE_100M = 60;
@@ -588,7 +593,7 @@ async function api(path) {
 
 /* Data */
 async function loadTrend() {
-  const from = addDays(localDay(new Date()), -(state.range * 2 - 1));
+  const from = addDays(localDay(new Date()), -(Math.max(state.range * 2, state.range + NORMAL_DAYS) - 1));
   const list = (collection) =>
     api(`/api/${collection}?gte.day=${from}&sort=day&order=asc&limit=1000&omit=samples`).then((r) => r.items.map((d) => d.data));
   const [hrv, strava] = await Promise.all([
@@ -873,12 +878,17 @@ function frame(el, height, ticks, label, tickText) {
   });
   return { svg, plot, y };
 }
-function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, regions = [], markers = [], gap, label, read, tickText }) {
+function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, zones = [], domain, regions = [], markers = [], gap, label, read, tickText }) {
   const all = series.flatMap((sr) => sr.values).concat(band ? [...band.lo, ...band.hi] : []).filter((v) => v != null);
   const pad = (Math.max(...all) - Math.min(...all)) * 0.08 || 2;
-  const ticks = niceTicks(Math.min(...all) - pad, Math.max(...all) + pad);
+  const ticks = domain ? niceTicks(domain[0], domain[1]) : niceTicks(Math.min(...all) - pad, Math.max(...all) + pad);
   const { svg, plot, y } = frame(el, height, ticks, label, tickText);
   const px = (v) => plot.x + ((v - xMin) / (xMax - xMin || 1)) * plot.w;
+  const low = ticks[0], high = ticks[ticks.length - 1];
+  for (const z of zones) {
+    const top = y(Math.min(z.to, high)), bottom = y(Math.max(z.from, low));
+    if (bottom > top) svg.insertBefore(s("rect", { x: plot.x, y: top, width: plot.w, height: bottom - top, fill: z.color, opacity: 0.14 }), svg.firstChild);
+  }
 
   for (const r of regions) {
     const x1 = px(Math.max(r.from, xMin)), x2 = px(Math.min(r.to, xMax));
@@ -2642,7 +2652,7 @@ function recoveryCard() {
   card.append(chart);
   chart.draw = () => lineChart(chart, {
     height: 150, x: list.map((d) => daysBetween(start, d.day)), xMin: 0, xMax: daysBetween(start, now.day), xTicks: dateAxis(start, now.day),
-    series: [{ color: "var(--hrv)", values: list.map((d) => d.score) }],
+    series: [{ color: "var(--hrv)", values: list.map((d) => d.score) }], domain: [0, 100], zones: SCORE_ZONES,
     label: "Recovery za posledných 30 dní",
     read: (i) => ({ title: fullDate(list[i].day), rows: [
       { color: "var(--hrv)", value: String(list[i].score), label: "recovery" },
@@ -2671,7 +2681,7 @@ function readinessCard() {
   card.append(chart);
   chart.draw = () => lineChart(chart, {
     height: 170, x: list.map((d) => daysBetween(start, d.day)), xMin: 0, xMax: daysBetween(start, now.day), xTicks: dateAxis(start, now.day),
-    series: [{ color: "var(--hrv)", values: list.map((d) => d.score) }],
+    series: [{ color: "var(--hrv)", values: list.map((d) => d.score) }], domain: [0, 100], zones: SCORE_ZONES,
     label: "Pripravenosť za posledných 30 dní",
     read: (i) => ({ title: fullDate(list[i].day), rows: [
       { color: "var(--hrv)", value: String(list[i].score), label: "pripravenosť" },
@@ -2846,18 +2856,21 @@ function hrvCard() {
     return mean(all.filter((d) => d.day >= lower && d.day <= day).map((d) => d.avg));
   };
   const values = list.map((d) => d.avg), smooth = list.map((d) => rolling(d.day));
+  const normal = list.map((d) => normalRange(all, (r) => r.avg, d.day));
   const start = list[0]?.day ?? from;
   const x = list.map((d) => daysBetween(start, d.day));
   return trendCard("HRV", "Denný priemer SDNN z Apple Watch", list, {
     latest: () => latestValue(`${num(values.at(-1))} ms`, list.at(-1).day, `${num(mean(values))} ms`),
-    legend: legend([{ kind: "dot", color: "var(--hrv)", label: "deň" }, { kind: "line", color: "var(--hrv)", label: "7-dňový priemer" }]),
+    legend: legend([{ kind: "dot", color: "var(--hrv)", label: "deň" }, { kind: "line", color: "var(--hrv)", label: "7-dňový priemer" }, { color: "var(--hrv)", opacity: 0.25, label: "tvoja norma" }]),
     draw: (el) => lineChart(el, {
       x, xMin: 0, xMax: daysBetween(start, today), xTicks: dateAxis(start, today),
       series: [{ color: "var(--hrv)", values, dots: true, opacity: 0.4 }, { color: "var(--hrv)", values: smooth }],
-      label: "Denné HRV a sedemdňový priemer",
+      band: { lo: normal.map((n) => n?.[0] ?? null), hi: normal.map((n) => n?.[1] ?? null), color: "var(--hrv)" },
+      label: "Denné HRV, sedemdňový priemer a tvoja norma",
       read: (i) => ({ title: fullDate(list[i].day), rows: [
         { color: "var(--hrv)", value: `${num(values[i], 1)} ms`, label: "deň" },
-        { color: "var(--hrv)", value: `${num(smooth[i], 1)} ms`, label: "7-dňový priemer" }] }),
+        { color: "var(--hrv)", value: `${num(smooth[i], 1)} ms`, label: "7-dňový priemer" },
+        normal[i] ? { value: `${num(normal[i][0])}–${num(normal[i][1])} ms`, label: "norma" } : null].filter(Boolean) }),
     }),
     table: () => table([{ label: "Deň" }, { label: "HRV (ms)", num: true }, { label: "7-dňový priemer", num: true }],
       list.slice().reverse().map((d, i, rev) => [fullDate(d.day), num(d.avg, 1), num(smooth[rev.length - 1 - i], 1)])),
@@ -2868,13 +2881,17 @@ function restCard() {
   const list = state.rest.filter((d) => d.day >= from);
   const start = list[0]?.day ?? from;
   const x = list.map((d) => daysBetween(start, d.day));
+  const normal = list.map((d) => normalRange(state.rest, (r) => r.bpm, d.day));
   return trendCard("Pokojový tep", "Hodnota z Apple Watch", list.length >= 2 ? list : [], {
     latest: () => latestValue(`${list.at(-1).bpm} bpm`, list.at(-1).day, `${num(mean(list.map((d) => d.bpm)))} bpm`),
+    legend: legend([{ kind: "line", color: "var(--hr)", label: "pokojový tep" }, { color: "var(--hr)", opacity: 0.25, label: "tvoja norma" }]),
     draw: (el) => lineChart(el, {
       x, xMin: 0, xMax: daysBetween(start, today), xTicks: dateAxis(start, today),
       series: [{ color: "var(--hr)", values: list.map((d) => d.bpm) }],
-      label: "Pokojový tep za každý deň",
-      read: (i) => ({ title: fullDate(list[i].day), rows: [{ color: "var(--hr)", value: `${list[i].bpm} bpm`, label: "pokojový tep" }] }),
+      band: { lo: normal.map((n) => n?.[0] ?? null), hi: normal.map((n) => n?.[1] ?? null), color: "var(--hr)" },
+      label: "Pokojový tep za každý deň a tvoja norma",
+      read: (i) => ({ title: fullDate(list[i].day), rows: [{ color: "var(--hr)", value: `${list[i].bpm} bpm`, label: "pokojový tep" },
+        normal[i] ? { value: `${num(normal[i][0])}–${num(normal[i][1])} bpm`, label: "norma" } : null].filter(Boolean) }),
     }),
     table: () => table([{ label: "Deň" }, { label: "Pokojový tep (bpm)", num: true }],
       list.slice().reverse().map((d) => [fullDate(d.day), String(d.bpm)])),
@@ -2992,25 +3009,51 @@ function bodyMetrics() {
   const { from } = periods();
   const series = (rows, value) => rows.filter((d) => d.day >= from && value(d) != null).map((d) => ({ day: d.day, value: value(d) }));
   return [
-    { id: "recovery", label: "Recovery", points: series(state.recovery, (d) => d.score), digits: 0, unit: "", color: "var(--hrv)", card: recoveryCard },
-    { id: "readiness", label: "Pripravenosť", points: series(state.readiness, (d) => d.score), digits: 0, unit: "", color: "var(--hrv)", card: readinessCard },
-    { id: "hrv", label: "HRV", points: series(state.trend.hrv, (d) => d.avg), digits: 0, unit: "ms", color: "var(--hrv)", card: hrvCard },
-    { id: "rest", label: "Pokojový tep", points: series(state.rest, (d) => d.bpm), digits: 0, unit: "bpm", color: "var(--hr)", card: restCard },
+    { id: "recovery", label: "Recovery", points: series(state.recovery, (d) => d.score), digits: 0, unit: "", color: "var(--hrv)", card: recoveryCard,
+      verdicts: ["Nízke", "Stredné", "Dobré"] },
+    { id: "readiness", label: "Pripravenosť", points: series(state.readiness, (d) => d.score), digits: 0, unit: "", color: "var(--hrv)", card: readinessCard,
+      verdicts: ["Uber", "Bežný tréning", "Môžeš pridať"] },
+    { id: "hrv", label: "HRV", points: series(state.trend.hrv, (d) => d.avg), digits: 0, unit: "ms", color: "var(--hrv)", card: hrvCard,
+      normal: (day) => normalRange(state.trend.hrv, (r) => r.avg, day), higherIsBetter: true },
+    { id: "rest", label: "Pokojový tep", points: series(state.rest, (d) => d.bpm), digits: 0, unit: "bpm", color: "var(--hr)", card: restCard,
+      normal: (day) => normalRange(state.rest, (r) => r.bpm, day), higherIsBetter: false },
     { id: "weight", label: "Hmotnosť", points: series(state.weight, (d) => d.kilograms), digits: 1, unit: "kg", color: "var(--ride)",
       card: () => measureCard("Hmotnosť", weightNote(), state.weight, "kilograms", 1, "kg", "var(--ride)") },
     { id: "vo2", label: "VO2 Max", points: series(state.vo2, (d) => d.vo2_ml_per_min_per_kg), digits: 1, unit: "ml/kg/min", color: "var(--strength)",
       card: () => measureCard("VO2 Max", "Kondícia podľa Apple Watch", state.vo2, "vo2_ml_per_min_per_kg", 1, "ml/kg/min", "var(--strength)") },
   ];
 }
-function sparkline(points, color) {
-  const values = points.map((p) => p.value);
+function normalRange(rows, value, day) {
+  const since = addDays(day, -NORMAL_DAYS);
+  const before = rows.filter((r) => r.day < day && r.day >= since).map(value).filter((v) => v != null);
+  if (before.length < MIN_NORMAL_POINTS) return null;
+  const m = mean(before);
+  const sd = Math.sqrt(mean(before.map((v) => (v - m) ** 2)));
+  return [m - sd, m + sd];
+}
+function sparkline(points, color, band) {
+  const values = points.map((p) => p.value).concat(band ?? []);
   const lo = Math.min(...values), hi = Math.max(...values), span = hi - lo || 1;
+  const yOf = (v) => 30 - ((v - lo) / span) * 28;
   const days = Math.max(daysBetween(points[0].day, points[points.length - 1].day), 1);
-  const xy = points.map((p) => [(daysBetween(points[0].day, p.day) / days) * 100, 30 - ((p.value - lo) / span) * 28]);
+  const xy = points.map((p) => [(daysBetween(points[0].day, p.day) / days) * 100, yOf(p.value)]);
   const last = xy[xy.length - 1];
   return s("svg", { viewBox: "0 0 100 31", preserveAspectRatio: "none", "aria-hidden": "true" },
+    band ? s("rect", { x: 0, y: yOf(band[1]), width: 100, height: yOf(band[0]) - yOf(band[1]), fill: color, opacity: 0.16 }) : null,
     s("polyline", { points: xy.map((p) => p.join(",")).join(" "), fill: "none", stroke: color, "stroke-width": 2, "stroke-linejoin": "round", "vector-effect": "non-scaling-stroke" }),
     s("line", { x1: last[0], x2: last[0] + 0.01, y1: last[1], y2: last[1], stroke: color, "stroke-width": 7, "stroke-linecap": "round", "vector-effect": "non-scaling-stroke" }));
+}
+// A score reads by its zone, HRV and resting heart rate by your normal range. A value outside
+// the range in the good direction is good, in the other direction a warning.
+function metricVerdict(metric, value, band) {
+  if (metric.verdicts) {
+    const zone = value >= 67 ? 2 : value >= 34 ? 1 : 0;
+    return [["critical", "warning", "good"][zone], metric.verdicts[zone]];
+  }
+  if (!band) return null;
+  if (value >= band[0] && value <= band[1]) return ["muted", "v tvojej norme"];
+  const above = value > band[1];
+  return [above === metric.higherIsBetter ? "good" : "warning", above ? "nad normou" : "pod normou"];
 }
 function metricTile(metric) {
   const open = state.bodyOpen === metric.id;
@@ -3022,9 +3065,11 @@ function metricTile(metric) {
   const last = points[points.length - 1];
   const average = mean(points.map((p) => p.value));
   const diff = Number((last.value - average).toFixed(metric.digits));
+  const band = metric.normal?.(last.day);
+  const [tone, verdict] = metricVerdict(metric, last.value, band) ?? [null, diff ? `${diff > 0 ? "↑" : "↓"} ${num(Math.abs(diff), metric.digits)} oproti priemeru` : "ako priemer"];
   tile.append(h("div", { class: "value" }, num(last.value, metric.digits), metric.unit ? h("small", { text: metric.unit }) : null),
-    h("div", { class: "delta", text: `${dayName(last.day)} · ${diff ? `${diff > 0 ? "↑" : "↓"} ${num(Math.abs(diff), metric.digits)} oproti priemeru` : "ako priemer"}` }));
-  if (points.length >= 2) tile.append(sparkline(points, metric.color));
+    h("div", { class: "delta" }, `${dayName(last.day)} · `, tone ? Object.assign(h("i"), { style: `background:var(--${tone})` }) : null, verdict));
+  if (points.length >= 2) tile.append(sparkline(points, metric.color, band));
   return tile;
 }
 function overviewView(page) {
