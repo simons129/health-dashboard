@@ -1829,11 +1829,22 @@ function workoutSuggestion(key, type) {
   }
   if (key === "plavanie") {
     const swim = [...state.swims.values()].filter((x) => x.reliable && x.sets.length).sort((a, b) => b.day.localeCompare(a.day))[0];
-    const main = swim ? swim.sets.reduce((a, b) => (b.repeats * b.distance > a.repeats * a.distance ? b : a)) : null;
     if (option[0] === "sets") {
-      return main
-        ? { title: `Série ${main.repeats + 1} × ${main.distance} m`, steps: ["300 m rozplávanie", `${main.repeats + 1} × ${main.distance} m v čase ${clockShort(main.swim)}, pauza ${clockShort(main.rest || 30)}`, "200 m vyplávanie"] }
-        : { title: "Série 10 × 50 m", steps: ["300 m rozplávanie", "10 × 50 m, pauza 0:30", "200 m vyplávanie"] };
+      if (!swim) return { title: "Série 10 × 50 m", steps: ["300 m rozplávanie", "10 × 50 m, pauza 0:30", "200 m vyplávanie"] };
+      // Long pauses split one workout into several sets of the same swim. Together they are the
+      // main set, kept in as many blocks with one more repeat in each.
+      const metres = new Map();
+      for (const set of swim.sets) metres.set(set.distance, (metres.get(set.distance) ?? 0) + set.repeats * set.distance);
+      const distance = [...metres].sort((a, b) => b[1] - a[1])[0][0];
+      const same = swim.sets.filter((set) => set.distance === distance);
+      const blocks = same.length;
+      const per = Math.round(same.reduce((sum, set) => sum + set.repeats, 0) / blocks) + 1;
+      const cycle = median(same.map((set) => set.cycle).filter(Boolean));
+      const pace = cycle ? `na ${clockShort(cycle)}` : `pauza ${clockShort(median(same.map((set) => set.rest)) || 30)}`;
+      const work = `${blocks > 1 ? `${blocks} × ` : ""}${per} × ${distance} m`;
+      return { title: `Série ${work}`, steps: ["300 m rozplávanie",
+        `${blocks > 1 ? `${plural(blocks, "blok", "bloky", "blokov")} po ` : ""}${per} × ${distance} m ${pace}, plávanie okolo ${clockShort(median(same.map((set) => set.swim)))}`,
+        blocks > 1 ? "Medzi blokmi 2–3 min voľne" : null, "200 m vyplávanie"].filter(Boolean) };
     }
     if (option[0] === "endurance") return { title: "Vytrvalostné 4 × 200 m", steps: ["300 m rozplávanie", `4 × 200 m${swim?.pace ? ` v tempe ${clockShort(swim.pace + 5)} /100 m` : ""}, pauza 0:30`, "200 m vyplávanie"] };
     return { title: "Technika 1 500 m", steps: ["300 m rozplávanie", "8 × 50 m technické cvičenia, pauza 0:30", "6 × 100 m pokojne, sústreď sa na dlhý záber", "200 m vyplávanie"] };
