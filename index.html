@@ -442,7 +442,9 @@ const SPORT_NAMES = {
   Ride: "Bicykel", VirtualRide: "Bicykel", Run: "Beh", TrailRun: "Beh", WeightTraining: "Sila",
   Workout: "Tréning", Swim: "Plávanie", Walk: "Chôdza", Hike: "Turistika",
 };
-const READINESS_HISTORY = 130;
+// Scores are computed for the chosen period, at least 30 days. Before it come 60 days of baseline
+// and 42 days for the training load to settle, so the first day of the period is already right.
+const READINESS_WARMUP = 102;
 const READINESS_DAYS = 30;
 // Hours until a muscle group is ready again after a one hour session. Strava's suffer score
 // follows heart rate and rates an hour of lifting about ten times lower than an hour of running.
@@ -700,7 +702,8 @@ async function loadBody() {
   state.lean = lean[0] ?? null;
 }
 async function loadReadiness() {
-  const from = addDays(localDay(new Date()), -READINESS_HISTORY);
+  const span = readinessSpan();
+  const from = addDays(localDay(new Date()), -(span + READINESS_WARMUP));
   const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
   const [hrv, resting, strava, workouts, activities] = await Promise.all([
     items(`/api/apple_heart_rate_variability?gte.day=${from}&sort=day&order=asc&limit=1000`),
@@ -712,8 +715,9 @@ async function loadReadiness() {
   state.workouts = workouts;
   state.activities = activities;
   const signals = bodySignals(hrv, resting, strava);
-  state.readiness = readinessSeries(from, signals, strava);
-  state.recovery = recoverySeries(signals);
+  state.readiness = readinessSeries(from, signals, strava, span);
+  state.recovery = recoverySeries(signals, span);
+  state.readinessSpan = span;
   state.strength = strengthStatus(strava, new Map(workouts.map((w) => [w.id, w.sets])));
 }
 
@@ -761,7 +765,11 @@ function bodyScore(signals, day, recentDays) {
 // Without overnight data a single day of HRV is noise: on two years of history neither morning
 // nor all-day HRV reacted to the previous day's training. The score therefore leans on training
 // load, and body signals count only as a 7 day trend against the personal baseline.
-function readinessSeries(from, signals, strava) {
+// Days to compute: the chosen period, or back to the day picked in Telo.
+function readinessSpan() {
+  return Math.max(READINESS_DAYS, state.range, daysBetween(state.day, localDay(new Date())) + BODY_DAY_TREND);
+}
+function readinessSeries(from, signals, strava, span = READINESS_DAYS) {
   const today = localDay(new Date());
   const load = new Map();
   for (const a of strava) {
@@ -773,7 +781,7 @@ function readinessSeries(from, signals, strava) {
   for (let day = from; day <= today; day = addDays(day, 1)) {
     acute += ((load.get(day) ?? 0) - acute) / 7;
     chronic += ((load.get(day) ?? 0) - chronic) / 42;
-    if (daysBetween(day, today) >= READINESS_DAYS || chronic < 1) continue;
+    if (daysBetween(day, today) >= span || chronic < 1) continue;
     const ratio = acute / chronic;
     const loadScore = clamp(100 - (ratio - 0.6) * 100);
     const body = bodyScore(signals, day, 7);
@@ -783,10 +791,10 @@ function readinessSeries(from, signals, strava) {
 }
 
 // Same-day signals only, so it follows the day's HRV readings and can swing a lot.
-function recoverySeries(signals) {
+function recoverySeries(signals, span = READINESS_DAYS) {
   const today = localDay(new Date());
   const series = [];
-  for (let back = READINESS_DAYS - 1; back >= 0; back--) {
+  for (let back = span - 1; back >= 0; back--) {
     const day = addDays(today, -back);
     const score = signals.calmHrv.has(day) ? bodyScore(signals, day, 1) : null;
     if (score != null) series.push({ day, score: Math.round(score), hrv: Math.exp(signals.calmHrv.get(day)) });
@@ -2818,7 +2826,7 @@ function strengthView() {
   return [strengthNav(showExercises ? "cviky" : "treningy"), h("div", { class: "sila", "data-detail": String(hasDetail) }, aside, detail)];
 }
 function recoveryCard() {
-  const list = state.recovery;
+  const list = state.recovery.filter((d) => d.day >= periods().from);
   const card = h("section", { class: "card" }, h("div", { class: "card-head" }, h("div", {},
     h("h2", { text: "Recovery" }),
     h("p", { class: "note", text: "HRV dňa oproti tvojim 60 dňom. Bez nočných dát a mení sa počas dňa, jedno číslo neber vážne." }))));
@@ -2836,7 +2844,7 @@ function recoveryCard() {
   chart.draw = () => lineChart(chart, {
     height: 150, x: list.map((d) => daysBetween(start, d.day)), xMin: 0, xMax: daysBetween(start, now.day), xTicks: dateAxis(start, now.day),
     series: [{ color: "var(--hrv)", values: list.map((d) => d.score) }], domain: [0, 100], zones: SCORE_ZONES,
-    label: "Recovery za posledných 30 dní",
+    label: `Recovery za ${RANGES.find(([days]) => days === state.range)?.[1] ?? "obdobie"}`,
     read: (i) => ({ title: fullDate(list[i].day), rows: [
       { color: "var(--hrv)", value: String(list[i].score), label: "recovery" },
       { value: `${num(list[i].hrv)} ms`, label: "HRV" }] }),
@@ -2846,7 +2854,7 @@ function recoveryCard() {
   return card;
 }
 function readinessCard() {
-  const list = state.readiness;
+  const list = state.readiness.filter((d) => d.day >= periods().from);
   const card = h("section", { class: "card" });
   card.append(h("div", { class: "card-head" }, h("div", {}, h("h2", { text: "Pripravenosť" }),
     h("p", { class: "note", text: "Odhad bez nočných dát: 60 % tréningová záťaž, 40 % 7-dňový trend. Sleduj vývoj, nie jeden deň." }))));
@@ -2865,7 +2873,7 @@ function readinessCard() {
   chart.draw = () => lineChart(chart, {
     height: 170, x: list.map((d) => daysBetween(start, d.day)), xMin: 0, xMax: daysBetween(start, now.day), xTicks: dateAxis(start, now.day),
     series: [{ color: "var(--hrv)", values: list.map((d) => d.score) }], domain: [0, 100], zones: SCORE_ZONES,
-    label: "Pripravenosť za posledných 30 dní",
+    label: `Pripravenosť za ${RANGES.find(([days]) => days === state.range)?.[1] ?? "obdobie"}`,
     read: (i) => ({ title: fullDate(list[i].day), rows: [
       { color: "var(--hrv)", value: String(list[i].score), label: "pripravenosť" },
       { value: `${num(list[i].ratio, 2)}×`, label: "záťaž" }] }),
@@ -3326,13 +3334,14 @@ async function refresh(work) {
     app.classList.remove("loading");
   }
 }
+const readinessCovers = () => (state.readinessSpan ?? 0) >= readinessSpan();
 function selectRange(days) {
   state.range = days;
-  refresh(loadTrend);
+  refresh(() => Promise.all([loadTrend(), readinessCovers() ? null : loadReadiness()]));
 }
 function selectDay(day) {
   state.day = day;
-  refresh(() => Promise.all([loadDay(), loadTrend()]));
+  refresh(() => Promise.all([loadDay(), loadTrend(), readinessCovers() ? null : loadReadiness()]));
 }
 const start = () => refresh(() => Promise.all([loadTrend(), loadDay(), loadReadiness(), loadBody()]));
 
