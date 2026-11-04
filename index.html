@@ -762,6 +762,31 @@ function bodyScore(signals, day, recentDays) {
   return values.length ? clamp(50 + 25 * mean(values)) : null;
 }
 
+// Strava's Relative Effort where it exists. A workout without heart rate gets your usual effort per
+// minute in that sport, so an hour of strength does not count like an hour of running.
+const EFFORT_FALLBACK_PER_MINUTE = 0.5;
+let effortRates = null;
+function effortRate(a) {
+  if (effortRates?.source !== state.activities) {
+    const bySport = new Map(), byGroup = new Map();
+    const add = (map, key, v) => map.set(key, [...(map.get(key) ?? []), v]);
+    for (const x of state.activities) {
+      if (!x.suffer_score || !duration(x)) continue;
+      const perMinute = x.suffer_score / (duration(x) / 60);
+      add(bySport, x.sport_type, perMinute);
+      add(byGroup, groupOf(x).id, perMinute);
+    }
+    const medians = (map) => new Map([...map].map(([k, v]) => [k, median(v)]));
+    effortRates = { source: state.activities, sport: medians(bySport), group: medians(byGroup) };
+  }
+  return effortRates.sport.get(a.sport_type) ?? effortRates.group.get(groupOf(a).id) ?? EFFORT_FALLBACK_PER_MINUTE;
+}
+function effortOf(a) {
+  if (a.suffer_score) return { value: a.suffer_score, estimated: false };
+  return { value: Math.round((effortRate(a) * duration(a)) / 60), estimated: true };
+}
+const effortText = (a) => { const e = effortOf(a); return `${e.estimated ? "≈" : ""}${e.value}`; };
+
 // Without overnight data a single day of HRV is noise: on two years of history neither morning
 // nor all-day HRV reacted to the previous day's training. The score therefore leans on training
 // load, and body signals count only as a 7 day trend against the personal baseline.
@@ -774,7 +799,7 @@ function readinessSeries(from, signals, strava, span = READINESS_DAYS) {
   const load = new Map();
   for (const a of strava) {
     const day = a.start_date_local.slice(0, 10);
-    load.set(day, (load.get(day) ?? 0) + (a.suffer_score || duration(a) / 60));
+    load.set(day, (load.get(day) ?? 0) + effortOf(a).value);
   }
   const series = [];
   let acute = 0, chronic = 0;
@@ -1526,7 +1551,7 @@ function dayPanel(day, list, { sheet = false, opening = false } = {}) {
   }
   for (const { activity: a, workout, mark } of list) {
     const label = a.sport_type === "WeightTraining" ? workout?.region ?? "Sila" : SPORT_NAMES[a.sport_type] ?? a.sport_type;
-    const facts = [hours(duration(a)), a.distance ? `${num(a.distance / 1000, 1)} km` : null, a.average_heartrate ? `${num(a.average_heartrate)} bpm` : null].filter(Boolean).join(" · ");
+    const facts = [hours(duration(a)), a.distance ? `${num(a.distance / 1000, 1)} km` : null, a.average_heartrate ? `${num(a.average_heartrate)} bpm` : null, `námaha ${effortText(a)}`].filter(Boolean).join(" · ");
     const body = [h("div", { class: "title", text: `${mark} ${label}` }), h("div", { class: "sub", text: a.name }), h("div", { class: "sub", text: facts })];
     card.append(workout ? h("a", { class: "visit", href: workoutHref(workout.id) }, ...body) : h("div", { class: "visit" }, ...body),
       workout ? aiBlock("workout", workout.id, "Zhodnotiť tréning") : aiBlock("activity", String(a.id), "Zhodnotiť tréning"));
@@ -2471,7 +2496,7 @@ function activityCard(sport, a) {
   const day = a.start_date_local.slice(0, 10);
   return h("section", { class: "card" }, h("h2", { text: a.name }), h("p", { class: "note", text: fullDate(day) }),
     h("div", { class: "facts" },
-      fact("Vzdialenosť", num(a.distance / 1000, 1), "km"), fact("Čas", hours(a.moving_time)),
+      fact("Vzdialenosť", num(a.distance / 1000, 1), "km"), fact("Čas", hours(a.moving_time)), fact("Námaha", effortText(a)),
       fact(sport.paceLabel, sport.paceText(sport.pace(a))),
       a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null,
       a.total_elevation_gain ? fact("Stúpanie", num(a.total_elevation_gain), "m") : null),
@@ -2495,7 +2520,7 @@ function lastWorkoutCard() {
     h("div", {}, h("h2", { text: `Posledný tréning: ${title}` }), h("p", { class: "note keep", text: `${dayName(day)} · ${a.name}` }))));
 
   if (workout) {
-    card.append(h("div", { class: "facts" }, fact("Čas", hours(duration(a))), fact("Série", String(workout.sets)), fact("Objem", num(workout.volume / 1000, 1), "t"),
+    card.append(h("div", { class: "facts" }, fact("Čas", hours(duration(a))), fact("Série", String(workout.sets)), fact("Objem", num(workout.volume / 1000, 1), "t"), fact("Námaha", effortText(a)),
       a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null));
     const index = exerciseIndex();
     for (const e of workout.exercises.slice(0, LAST_EXERCISES)) {
@@ -2509,15 +2534,15 @@ function lastWorkoutCard() {
   } else if (key === "plavanie" && state.swims.get(String(a.id))) {
     const swim = state.swims.get(String(a.id));
     card.append(h("div", { class: "facts" }, fact("Vzdialenosť", num(swim.distance), "m"), fact("Plávanie", hours(swim.swimSeconds)),
-      fact("Tempo", swim.pace == null ? "–" : `${clockShort(swim.pace)} /100 m`)));
+      fact("Tempo", swim.pace == null ? "–" : `${clockShort(swim.pace)} /100 m`), fact("Námaha", effortText(a))));
     for (const part of (swim.parts ?? []).filter((p) => p.repeats >= MIN_SET_REPEATS && !p.mixed)) card.append(swimPart(part));
     card.append(h("a", { class: "more", href: `#/vytrvalost/plavanie/${a.id}`, text: "Celý tréning ›" }));
   } else if (sport) {
     card.append(h("div", { class: "facts" }, a.distance ? fact("Vzdialenosť", num(a.distance / 1000, 1), "km") : null, fact("Čas", hours(duration(a))),
-      a.average_speed ? fact(sport.paceLabel, sport.paceText(sport.pace(a))) : null, a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null));
+      a.average_speed ? fact(sport.paceLabel, sport.paceText(sport.pace(a))) : null, a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null, fact("Námaha", effortText(a))));
     card.append(compareBars(sport, a), h("a", { class: "more", href: `#/vytrvalost/${key}/${a.id}`, text: "Celý tréning ›" }));
   } else {
-    card.append(h("div", { class: "facts" }, fact("Čas", hours(duration(a))), a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null));
+    card.append(h("div", { class: "facts" }, fact("Čas", hours(duration(a))), a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null, fact("Námaha", effortText(a))));
   }
   card.append(workout ? aiBlock("workout", workout.id, "Zhodnotiť tréning") : aiBlock("activity", String(a.id), "Zhodnotiť tréning"));
   return card;
@@ -3132,7 +3157,66 @@ function totalsCard(title, field, unit, color) {
       bars.filter((b) => b.total).reverse().map((b) => [b.title, num(b.total)])),
   });
 }
-function loadCard() {
+// Strava's Fitness & Freshness from the same effort: fitness follows 42 days, fatigue 7 days and
+// form is the difference. Deep negative form builds fitness, below -30 it is more than recovery keeps up with.
+const FORM_ZONES = [[5, "Čerstvý", "muted"], [-10, "Udržiavaš", "muted"], [-30, "Buduješ kondíciu", "good"], [-Infinity, "Preťaženie", "warning"]];
+function fitnessSeries() {
+  const load = new Map();
+  for (const a of state.activities) {
+    const day = a.start_date_local.slice(0, 10);
+    load.set(day, (load.get(day) ?? 0) + effortOf(a).value);
+  }
+  const first = [...load.keys()].sort()[0];
+  if (!first) return [];
+  const today = localDay(new Date());
+  const series = [];
+  let fitness = 0, fatigue = 0;
+  for (let day = first; day <= today; day = addDays(day, 1)) {
+    const value = load.get(day) ?? 0;
+    fitness += (value - fitness) / 42;
+    fatigue += (value - fatigue) / 7;
+    series.push({ day, load: value, fitness, fatigue, form: fitness - fatigue });
+  }
+  return series;
+}
+function fitnessCard() {
+  const { from, today } = periods();
+  const list = fitnessSeries().filter((d) => d.day >= from);
+  const card = h("section", { class: "card" });
+  if (list.length < 2) return card.append(h("h2", { text: "Kondícia a forma" }), h("div", { class: "empty", text: "V tomto období nie sú dáta." })), card;
+  const now = list[list.length - 1];
+  const [, zone, tone] = FORM_ZONES.find(([min]) => now.form >= min);
+  const start = list[0].day;
+  const x = list.map((d) => daysBetween(start, d.day));
+  const axis = { x, xMin: 0, xMax: daysBetween(start, today), xTicks: dateAxis(start, today) };
+  const signedNum = (v) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${num(Math.abs(v))}`;
+  card.append(h("div", { class: "card-head" },
+    h("div", {}, h("h2", { text: "Kondícia a forma" }), h("p", { class: "note", text: "Ako Fitness & Freshness v Strave: kondícia je námaha za 6 týždňov, únava za 7 dní, forma je ich rozdiel." })),
+    h("div", { class: "latest" }, h("b", { text: num(now.fitness) }), h("span", { text: "kondícia dnes" }))),
+    h("div", { class: "facts" }, fact("Únava", num(now.fatigue)), fact("Forma", signedNum(now.form))),
+    statusBadge([tone, tone === "warning" ? "!" : tone === "good" ? "✓" : "•", zone]));
+  const lines = h("div", { class: "chart" });
+  lines.draw = () => lineChart(lines, { ...axis, height: 190, domain: [0, Math.max(...list.map((d) => Math.max(d.fitness, d.fatigue)), 10)],
+    series: [{ color: "var(--ride)", values: list.map((d) => d.fitness) }, { color: "var(--run)", values: list.map((d) => d.fatigue) }],
+    label: "Kondícia a únava",
+    read: (i) => ({ title: fullDate(list[i].day), rows: [
+      { color: "var(--ride)", value: num(list[i].fitness), label: "kondícia" }, { color: "var(--run)", value: num(list[i].fatigue), label: "únava" },
+      { value: num(list[i].load), label: "námaha v ten deň" }] }) });
+  const form = h("div", { class: "chart" });
+  form.draw = () => lineChart(form, { ...axis, height: 130,
+    series: [{ color: "var(--ink)", values: list.map((d) => d.form) }],
+    zones: [{ from: -1000, to: -30, color: "var(--warning)" }, { from: -30, to: -10, color: "var(--good)" }],
+    label: "Forma",
+    read: (i) => ({ title: fullDate(list[i].day), rows: [{ value: signedNum(list[i].form), label: FORM_ZONES.find(([min]) => list[i].form >= min)[1].toLowerCase() }] }) });
+  card.append(legend([{ kind: "line", color: "var(--ride)", label: "kondícia" }, { kind: "line", color: "var(--run)", label: "únava" }]), lines,
+    legend([{ kind: "line", color: "var(--ink)", label: "forma" }, { color: "var(--good)", opacity: 0.3, label: "buduješ kondíciu" }, { color: "var(--warning)", opacity: 0.3, label: "preťaženie" }]), form,
+    table([{ label: "Deň" }, { label: "Námaha", num: true }, { label: "Kondícia", num: true }, { label: "Únava", num: true }, { label: "Forma", num: true }],
+      list.slice().reverse().map((d) => [fullDate(d.day), num(d.load), num(d.fitness), num(d.fatigue), signedNum(d.form)])));
+  return card;
+}
+function loadCard(kind = "hours") {
+  const effort = kind === "effort";
+  const amount = (a) => (effort ? effortOf(a).value : duration(a) / 3600);
   const { from, today } = periods();
   const activities = state.trend.strava.filter((a) => a.start_date_local.slice(0, 10) >= from);
   const weekly = state.range > 30;
@@ -3146,15 +3230,17 @@ function loadCard() {
     const inBar = activities.filter((a) => keyOf(a.start_date_local.slice(0, 10)) === day);
     const parts = GROUPS.map((g) => ({
       color: `var(--${g.id})`, label: g.label,
-      value: inBar.filter((a) => groupOf(a) === g).reduce((sum, a) => sum + duration(a) / 3600, 0),
+      value: inBar.filter((a) => groupOf(a) === g).reduce((sum, a) => sum + amount(a), 0),
     }));
     bars.push({ tick: shortDate(day), title: weekly ? `Týždeň od ${shortDate(day)}` : fullDate(day), parts, total: parts.reduce((sum, p) => sum + p.value, 0) });
   }
-  return trendCard("Tréningový objem", weekly ? "Hodiny za týždeň podľa športu" : "Hodiny za deň podľa športu", activities, {
+  const per = weekly ? "za týždeň" : "za deň";
+  return trendCard(effort ? "Námaha" : "Tréningový objem",
+    effort ? `Relative Effort zo Stravy ${per} podľa športu. Tréning bez tepu je odhad podľa tvojej bežnej námahy za minútu v danom športe.` : `Hodiny ${per} podľa športu`, activities, {
     legend: legend(GROUPS.map((g) => ({ color: `var(--${g.id})`, label: g.label }))),
-    draw: (el) => barChart(el, { bars, label: "Hodiny tréningu podľa športu" }),
-    table: () => table([{ label: weekly ? "Týždeň" : "Deň" }, ...GROUPS.map((g) => ({ label: `${g.label} (h)`, num: true }))],
-      bars.filter((b) => b.total).reverse().map((b) => [b.title, ...b.parts.map((p) => num(p.value, 1))])),
+    draw: (el) => barChart(el, { bars, label: effort ? "Námaha podľa športu" : "Hodiny tréningu podľa športu", ...(effort ? { format: (v) => num(v) } : {}) }),
+    table: () => table([{ label: weekly ? "Týždeň" : "Deň" }, ...GROUPS.map((g) => ({ label: effort ? g.label : `${g.label} (h)`, num: true }))],
+      bars.filter((b) => b.total).reverse().map((b) => [b.title, ...b.parts.map((p) => num(p.value, effort ? 0 : 1))])),
   });
 }
 /* Shell */
@@ -3300,7 +3386,7 @@ function overviewView(page) {
     return [overviewNav(page), bodyFilters(), state.bodyDay ? dayNav() : null, h("div", { class: "metrics" }, ...tiles), state.bodyDay ? dayCard() : null].filter(Boolean);
   }
   if (page === "aktivita") {
-    return [overviewNav(page), filters(), tiles(3, 6), h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")), loadCard()];
+    return [overviewNav(page), filters(), tiles(3, 6), fitnessCard(), h("div", { class: "grid2" }, loadCard("effort"), loadCard()), h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)"))];
   }
   return [overviewNav(page), heroCard(), alertsCard(), weekCard(), lastWorkoutCard()].filter(Boolean);
 }
