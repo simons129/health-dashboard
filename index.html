@@ -362,9 +362,9 @@ details.table-fold[open] { margin-top: 8px; }
 #app.enter > :nth-child(5) { animation-delay: .08s; }
 #app.enter > :nth-child(n+6) { animation-delay: .12s; }
 #app.enter .ring-dial .arc { animation: ring-in .9s cubic-bezier(.2,.7,.2,1) .12s backwards; }
-.metrics + .card.opened { animation: fade-in .2s ease-out; }
+.metrics > .card.opened { animation: fade-in .2s ease-out; }
 @media (prefers-reduced-motion: reduce) {
-  #app.enter > :not(header):not(nav.tabs), #app.enter .ring-dial .arc, .metrics + .card.opened { animation: none; }
+  #app.enter > :not(header):not(nav.tabs), #app.enter .ring-dial .arc, .metrics > .card.opened { animation: none; }
 }
 .ring .sub { font-size: 12px; opacity: .75; }
 .dots { display: flex; gap: 4px; margin-top: 5px; }
@@ -388,7 +388,16 @@ details.table-fold[open] { margin-top: 8px; }
 .timeline { margin-top: 12px; border-top: 1px solid var(--grid); padding-top: 8px; }
 .timeline-row { display: flex; gap: 12px; padding: 4px 0; font-size: 13.5px; }
 .timeline-row .time { flex: none; width: 92px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
-.metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); grid-auto-flow: row dense; gap: 10px; margin-bottom: 12px; }
+/* An opened chart spans the grid right under its tile, the tiles after it fill the row it left. */
+.metrics > .card { grid-column: 1 / -1; margin: 0; }
+.daynav { display: grid; grid-template-columns: 44px 1fr 44px; gap: 8px; align-items: stretch; margin: -4px 0 14px; }
+.daynav button, .daynav .date { min-height: 44px; border-radius: 12px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); font-size: 20px; padding: 0; }
+.daynav button:disabled { opacity: .3; cursor: default; }
+.daynav .date { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.15; }
+.daynav .date b { font-size: 15px; font-weight: 650; }
+.daynav .date span { font-size: 12px; color: var(--ink-2); }
+.daynav .date input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; border: 0; padding: 0; min-height: 0; }
 .body-metric { display: flex; flex-direction: column; gap: 2px; text-align: left; font: inherit; color: inherit; cursor: pointer; padding: 12px 13px 10px; }
 .body-metric[aria-expanded=true] { border-color: var(--hrv); box-shadow: inset 0 0 0 1px var(--hrv); }
 .body-metric .label { color: var(--ink-2); font-size: 13px; display: flex; justify-content: space-between; }
@@ -573,7 +582,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -640,7 +649,7 @@ async function api(path) {
 
 /* Data */
 async function loadTrend() {
-  const from = addDays(localDay(new Date()), -(Math.max(state.range * 2, state.range + NORMAL_DAYS) - 1));
+  const from = [addDays(localDay(new Date()), -(Math.max(state.range * 2, state.range + NORMAL_DAYS) - 1)), addDays(state.day, -(NORMAL_DAYS + BODY_DAY_TREND))].sort()[0];
   const list = (collection) =>
     api(`/api/${collection}?gte.day=${from}&sort=day&order=asc&limit=1000&omit=samples`).then((r) => r.items.map((d) => d.data));
   const [hrv, strava] = await Promise.all([
@@ -1514,7 +1523,7 @@ function dayPanel(day, list, { sheet = false, opening = false } = {}) {
     card.append(workout ? h("a", { class: "visit", href: workoutHref(workout.id) }, ...body) : h("div", { class: "visit" }, ...body),
       workout ? aiBlock("workout", workout.id, "Zhodnotiť tréning") : aiBlock("activity", String(a.id), "Zhodnotiť tréning"));
   }
-  card.append(h("a", { class: "more", href: "#/telo", text: "Tep a HRV v tento deň ›", onclick: () => { state.day = day; loadDay().then(render); } }));
+  card.append(h("a", { class: "more", href: "#/telo", text: "Tep a HRV v tento deň ›", onclick: () => { state.day = day; state.bodyDay = true; Promise.all([loadDay(), loadTrend()]).then(render); } }));
   return card;
 }
 function closeDaySheet() {
@@ -3147,14 +3156,26 @@ function drawCharts() {
   app.querySelectorAll(".chart").forEach((el) => el.draw?.());
 }
 function filters() {
-  const { today } = periods();
   return h("div", { class: "filters" },
     h("div", { class: "seg", role: "group", "aria-label": "Obdobie" }, ...RANGES.map(([days, label]) =>
-      h("button", { "aria-pressed": String(state.range === days), text: label, onclick: () => selectRange(days) }))),
-    h("div", { class: "daypick" },
-      h("button", { "aria-label": "Predchádzajúci deň", text: "‹", onclick: () => selectDay(addDays(state.day, -1)) }),
-      h("input", { type: "date", value: state.day, max: today, "aria-label": "Deň pre graf tepu", onchange: (e) => e.target.value && selectDay(e.target.value) }),
-      state.day < today ? h("button", { "aria-label": "Nasledujúci deň", text: "›", onclick: () => selectDay(addDays(state.day, 1)) }) : null));
+      h("button", { "aria-pressed": String(state.range === days), text: label, onclick: () => selectRange(days) }))));
+}
+function bodyFilters() {
+  const pick = (days) => { state.bodyDay = false; selectRange(days); };
+  return h("div", { class: "filters" },
+    h("div", { class: "seg", role: "group", "aria-label": "Obdobie" },
+      h("button", { "aria-pressed": String(state.bodyDay), text: "1 deň", onclick: () => { state.bodyDay = true; render(); } }),
+      ...RANGES.map(([days, label]) => h("button", { "aria-pressed": String(!state.bodyDay && state.range === days), text: label, onclick: () => pick(days) }))));
+}
+// Previous and next day beside the date, a tap on the date opens the phone's own date picker.
+function dayNav() {
+  const today = localDay(new Date());
+  return h("div", { class: "daynav" },
+    h("button", { type: "button", "aria-label": "Predchádzajúci deň", text: "‹", onclick: () => selectDay(addDays(state.day, -1)) }),
+    h("label", { class: "date" }, h("b", { text: dayName(state.day) === shortDate(state.day) ? fullDate(state.day) : `${dayName(state.day)}, ${shortDate(state.day)}` }),
+      h("span", { text: "Zmeniť deň" }),
+      h("input", { type: "date", value: state.day, max: today, "aria-label": "Deň", onchange: (e) => e.target.value && selectDay(e.target.value) })),
+    Object.assign(h("button", { type: "button", "aria-label": "Nasledujúci deň", text: "›", onclick: () => selectDay(addDays(state.day, 1)) }), { disabled: state.day >= today }));
 }
 function route() {
   const [, page = "prehlad", kind = "", id = ""] = location.hash.slice(1).split("/");
@@ -3178,19 +3199,24 @@ function overviewNav(page) {
   const link = (id, href, label) => h("a", { href, "aria-current": String(page === id), text: label });
   return h("div", { class: "seg subnav", role: "group", "aria-label": "Prehľad" }, link("prehlad", "#/", "Dnes"), link("telo", "#/telo", "Telo"), link("aktivita", "#/aktivita", "Aktivita"));
 }
-// Body measures as tiles with a small trend, the full chart opens under them on a tap.
+// Body measures as tiles with a small trend, the full chart opens right under its tile on a tap.
+// For one day the tiles show that day, with the 30 days before it as the trend. Scores, HRV and
+// resting heart rate belong to that day only, weight and VO2 Max are the latest by then.
+const BODY_DAY_TREND = 30;
 function bodyMetrics() {
   const { from } = periods();
-  const series = (rows, value) => rows.filter((d) => d.day >= from && value(d) != null).map((d) => ({ day: d.day, value: value(d) }));
+  const day = state.bodyDay ? state.day : null;
+  const since = day ? addDays(day, -(BODY_DAY_TREND - 1)) : from;
+  const series = (rows, value) => rows.filter((d) => d.day >= since && (!day || d.day <= day) && value(d) != null).map((d) => ({ day: d.day, value: value(d) }));
   return [
     { id: "recovery", label: "Recovery", points: series(state.recovery, (d) => d.score), digits: 0, unit: "", color: "var(--hrv)", card: recoveryCard,
-      verdicts: ["Nízke", "Stredné", "Dobré"] },
+      verdicts: ["Nízke", "Stredné", "Dobré"], daily: true },
     { id: "readiness", label: "Pripravenosť", points: series(state.readiness, (d) => d.score), digits: 0, unit: "", color: "var(--hrv)", card: readinessCard,
-      verdicts: ["Uber", "Bežný tréning", "Môžeš pridať"] },
+      verdicts: ["Uber", "Bežný tréning", "Môžeš pridať"], daily: true },
     { id: "hrv", label: "HRV", points: series(state.trend.hrv, (d) => d.avg), digits: 0, unit: "ms", color: "var(--hrv)", card: hrvCard,
-      normal: (day) => normalRange(state.trend.hrv, (r) => r.avg, day), higherIsBetter: true },
+      normal: (day) => normalRange(state.trend.hrv, (r) => r.avg, day), higherIsBetter: true, daily: true },
     { id: "rest", label: "Pokojový tep", points: series(state.rest, (d) => d.bpm), digits: 0, unit: "bpm", color: "var(--hr)", card: restCard,
-      normal: (day) => normalRange(state.rest, (r) => r.bpm, day), higherIsBetter: false },
+      normal: (day) => normalRange(state.rest, (r) => r.bpm, day), higherIsBetter: false, daily: true },
     { id: "weight", label: "Hmotnosť", points: series(state.weight, (d) => d.kilograms), digits: 1, unit: "kg", color: "var(--ride)",
       card: () => measureCard("Hmotnosť", weightNote(), state.weight, "kilograms", 1, "kg", "var(--ride)") },
     { id: "vo2", label: "VO2 Max", points: series(state.vo2, (d) => d.vo2_ml_per_min_per_kg), digits: 1, unit: "ml/kg/min", color: "var(--strength)",
@@ -3230,13 +3256,19 @@ function metricVerdict(metric, value, band) {
   return [above === metric.higherIsBetter ? "good" : "warning", above ? "nad normou" : "pod normou"];
 }
 function metricTile(metric) {
-  const open = state.bodyOpen === metric.id;
-  const tile = h("button", { class: "tile body-metric", type: "button", "aria-expanded": String(open),
-    onclick: () => { state.bodyOpen = open ? null : metric.id; state.bodyAnimate = true; render(); } });
+  const day = state.bodyDay ? state.day : null;
+  const open = !day && state.bodyOpen === metric.id;
+  const tile = day ? h("div", { class: "tile body-metric" })
+    : h("button", { class: "tile body-metric", type: "button", "aria-expanded": String(open),
+      onclick: () => { state.bodyOpen = open ? null : metric.id; state.bodyAnimate = true; render(); } });
   const { points } = metric;
-  tile.append(h("div", { class: "label" }, h("span", { text: metric.label }), h("span", { "aria-hidden": "true", text: open ? "▴" : "▾" })));
-  if (!points.length) return tile.append(h("div", { class: "delta", text: "V tomto období nie sú dáta." })), tile;
+  tile.append(h("div", { class: "label" }, h("span", { text: metric.label }), day ? null : h("span", { "aria-hidden": "true", text: open ? "▴" : "▾" })));
   const last = points[points.length - 1];
+  if (!last || (day && metric.daily && last.day !== day)) {
+    tile.append(h("div", { class: "value", text: "–" }), h("div", { class: "delta", text: day ? "Bez merania v tento deň" : "V tomto období nie sú dáta." }));
+    if (points.length >= 2) tile.append(metricSparkline(points, metric.color));
+    return tile;
+  }
   const average = mean(points.map((p) => p.value));
   const diff = Number((last.value - average).toFixed(metric.digits));
   const band = metric.normal?.(last.day);
@@ -3249,11 +3281,15 @@ function metricTile(metric) {
 function overviewView(page) {
   if (page === "telo") {
     const metrics = bodyMetrics();
-    const open = metrics.find((m) => m.id === state.bodyOpen);
-    const opened = open ? open.card() : null;
-    if (opened && state.bodyAnimate) opened.classList.add("opened");
+    const tiles = metrics.map(metricTile);
+    const open = state.bodyDay ? -1 : metrics.findIndex((m) => m.id === state.bodyOpen);
+    if (open >= 0) {
+      const opened = metrics[open].card();
+      if (state.bodyAnimate) opened.classList.add("opened", "scroll-to");
+      tiles.splice(open + 1, 0, opened);
+    }
     state.bodyAnimate = false;
-    return [overviewNav(page), filters(), h("div", { class: "metrics" }, ...metrics.map(metricTile)), opened, dayCard()].filter(Boolean);
+    return [overviewNav(page), bodyFilters(), state.bodyDay ? dayNav() : null, h("div", { class: "metrics" }, ...tiles), state.bodyDay ? dayCard() : null].filter(Boolean);
   }
   if (page === "aktivita") {
     return [overviewNav(page), filters(), tiles(3, 6), h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")), loadCard()];
@@ -3271,6 +3307,7 @@ function render() {
   app.replaceChildren(head, tabs(page), ...(views[page]?.() ?? overviewView(page)));
   drawCharts();
   enhance();
+  app.querySelector(".scroll-to")?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
 }
 function showError() {
   app.classList.remove("loading");
@@ -3295,7 +3332,7 @@ function selectRange(days) {
 }
 function selectDay(day) {
   state.day = day;
-  refresh(loadDay);
+  refresh(() => Promise.all([loadDay(), loadTrend()]));
 }
 const start = () => refresh(() => Promise.all([loadTrend(), loadDay(), loadReadiness(), loadBody()]));
 
