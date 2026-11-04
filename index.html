@@ -168,6 +168,8 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .swim-pause::before, .swim-pause::after { content: ""; flex: 1; border-top: 1px dashed var(--axis); }
 .plan-line { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; }
 .plan-line b { color: var(--ink); font-size: 14px; font-weight: 640; }
+.ex-body { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.ex-body svg { flex: none; width: 84px; height: 34px; overflow: visible; }
 .muscle { display: grid; grid-template-columns: 76px minmax(0, 1fr) 112px; gap: 10px; align-items: center; margin-top: 9px; font-size: 13px; }
 .muscle .value { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .muscle .value b { color: var(--ink); font-weight: 620; }
@@ -1133,10 +1135,29 @@ function planCard(index) {
         h("span", { class: "right" },
           target.increase ? h("span", { class: "badge", text: `${signed(target.increase)}` }) : null,
           h("span", { class: "chev", text: "›", "aria-hidden": "true" }))),
-      h("div", { class: "plan-line" }, "Cieľ ", h("b", { text: target.next })),
-      h("div", { class: "plan-line", text: `Minule ${target.previous}` })));
+      h("div", { class: "ex-body" },
+        h("div", {}, h("div", { class: "plan-line" }, "Cieľ ", h("b", { text: target.next })),
+          h("div", { class: "plan-line", text: `Minule ${target.previous}` })),
+        exerciseSpark(entry, target.increase))));
   }
   return card;
+}
+// The top weight of the last sessions, and when the plan adds weight, a dashed step to the target.
+const SPARK_SESSIONS = 8;
+function exerciseSpark(entry, increase) {
+  const weights = entry.sessions.filter((p) => p.top).slice(-SPARK_SESSIONS).map((p) => p.top.kg);
+  if (weights.length < 2) return null;
+  const next = increase ? weights[weights.length - 1] + increase : null;
+  const all = next ? [...weights, next] : weights;
+  const lo = Math.min(...all), hi = Math.max(...all), w = 84, ht = 34, pad = 4;
+  const x = (i) => pad + (i / Math.max(all.length - 1, 1)) * (w - pad * 2);
+  const y = (v) => ht - pad - ((v - lo) / (hi - lo || 1)) * (ht - pad * 2);
+  const last = weights.length - 1;
+  return s("svg", { viewBox: `0 0 ${w} ${ht}`, role: "img", "aria-label": `Posledné váhy: ${weights.map((v) => num(v, v % 1 ? 1 : 0)).join(", ")} kg${next ? `, cieľ ${num(next, next % 1 ? 1 : 0)} kg` : ""}` },
+    s("polyline", { points: weights.map((v, i) => `${x(i)},${y(v)}`).join(" "), fill: "none", stroke: "var(--hrv)", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }),
+    next ? s("line", { x1: x(last), y1: y(weights[last]), x2: x(last + 1), y2: y(next), stroke: "var(--hrv)", "stroke-width": 2, "stroke-dasharray": "3 3", "stroke-linecap": "round" }) : null,
+    s("circle", { cx: x(last), cy: y(weights[last]), r: 3, fill: "var(--hrv)" }),
+    next ? s("circle", { cx: x(last + 1), cy: y(next), r: 3.5, fill: "var(--surface)", stroke: "var(--hrv)", "stroke-width": 2 }) : null);
 }
 // Warm-ups do not count as training volume.
 function muscleSets() {
