@@ -147,6 +147,16 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .record .sub { color: var(--ink-2); font-size: 12.5px; }
 .record .value { flex: none; text-align: right; font-size: 13.5px; font-weight: 620; }
 .record .value small { display: block; color: var(--ink-2); font-size: 12px; font-weight: 450; }
+.last-head { display: flex; gap: 10px; align-items: center; }
+.last-head .mark { width: 36px; height: 36px; font-size: 19px; border-radius: 10px; }
+.last-head h2 { margin: 0; }
+.last-head .note { margin: 0; }
+.last-ex { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--grid); }
+.last-ex .title { font-weight: 600; font-size: 13.5px; }
+.last-ex .sets { margin-top: 3px; }
+.last-ex .badge { flex: none; font-size: 12px; color: var(--ink-2); }
+.compare svg { display: block; width: 100%; height: 48px; margin-top: 4px; }
+.compare .sub { color: var(--ink-2); font-size: 12.5px; display: flex; justify-content: space-between; }
 .swim-part { padding: 10px 0; border-top: 1px solid var(--grid); }
 .swim-part .head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .swim-part .title { font-weight: 650; font-size: 15px; }
@@ -2370,6 +2380,66 @@ function activityCard(sport, a) {
     aiBlock("activity", String(a.id), "Zhodnotiť tréning"),
     h("a", { class: "more", href: `#/kalendar/${day}`, text: "Otvoriť deň v kalendári ›" }));
 }
+// The latest workout with the picture that suits it: exercises for strength, sets for a swim,
+// and for a run or ride how it compares with the ones before.
+const LAST_SKIP = new Set(["Walk", "Hike"]);
+const LAST_EXERCISES = 4;
+const LAST_COMPARE = 8;
+function lastWorkoutCard() {
+  const a = [...state.activities].filter((x) => !LAST_SKIP.has(x.sport_type)).sort((x, y) => y.start_date.localeCompare(x.start_date))[0];
+  if (!a) return null;
+  const day = a.start_date_local.slice(0, 10);
+  const workout = a.sport_type === "WeightTraining" ? state.workouts.find((w) => w.id === String(a.id)) : null;
+  const [key, sport] = Object.entries(SPORTS).find(([, item]) => item.types.includes(a.sport_type)) ?? [];
+  const icon = a.sport_type === "WeightTraining" ? REGION_MARKS[workout?.region] ?? "🏋️" : ACTIVITY_ICONS[a.sport_type] ?? "•";
+  const title = workout?.region ?? SPORT_NAMES[a.sport_type] ?? a.sport_type;
+  const card = h("section", { class: "card" }, h("div", { class: "last-head" }, mark(icon, `${groupOf(a).id}`),
+    h("div", {}, h("h2", { text: `Posledný tréning: ${title}` }), h("p", { class: "note keep", text: `${dayName(day)} · ${a.name}` }))));
+
+  if (workout) {
+    card.append(h("div", { class: "facts" }, fact("Čas", hours(duration(a))), fact("Série", String(workout.sets)), fact("Objem", num(workout.volume / 1000, 1), "t"),
+      a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null));
+    const index = exerciseIndex();
+    for (const e of workout.exercises.slice(0, LAST_EXERCISES)) {
+      const session = index.get(e.name)?.sessions.find((p) => p.workout === workout);
+      const badge = session?.ormRecord || session?.record ? "🏆 rekord" : session?.change > 0 ? signed(session.change) : "";
+      card.append(h("a", { class: "last-ex", href: exerciseHref(e.name), style: "color:inherit;text-decoration:none" },
+        h("div", {}, h("div", { class: "title", text: e.name }), setChips(e.sets)), badge ? h("span", { class: "badge", text: badge }) : null));
+    }
+    const more = workout.exercises.length - LAST_EXERCISES;
+    card.append(h("a", { class: "more", href: workoutHref(workout.id), text: more > 0 ? `Celý tréning, ešte ${plural(more, "cvik", "cviky", "cvikov")} ›` : "Celý tréning ›" }));
+  } else if (key === "plavanie" && state.swims.get(String(a.id))) {
+    const swim = state.swims.get(String(a.id));
+    card.append(h("div", { class: "facts" }, fact("Vzdialenosť", num(swim.distance), "m"), fact("Plávanie", hours(swim.swimSeconds)),
+      fact("Tempo", swim.pace == null ? "–" : `${clockShort(swim.pace)} /100 m`)));
+    for (const part of (swim.parts ?? []).filter((p) => p.repeats >= MIN_SET_REPEATS && !p.mixed)) card.append(swimPart(part));
+    card.append(h("a", { class: "more", href: `#/vytrvalost/plavanie/${a.id}`, text: "Celý tréning ›" }));
+  } else if (sport) {
+    card.append(h("div", { class: "facts" }, a.distance ? fact("Vzdialenosť", num(a.distance / 1000, 1), "km") : null, fact("Čas", hours(duration(a))),
+      a.average_speed ? fact(sport.paceLabel, sport.paceText(sport.pace(a))) : null, a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null));
+    card.append(compareBars(sport, a), h("a", { class: "more", href: `#/vytrvalost/${key}/${a.id}`, text: "Celý tréning ›" }));
+  } else {
+    card.append(h("div", { class: "facts" }, fact("Čas", hours(duration(a))), a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null));
+  }
+  card.append(workout ? aiBlock("workout", workout.id, "Zhodnotiť tréning") : aiBlock("activity", String(a.id), "Zhodnotiť tréning"));
+  return card;
+}
+// Speed of this workout beside the ones before it, taller is faster, this one in its sport's color.
+function compareBars(sport, a) {
+  const list = state.activities.filter((x) => sport.types.includes(x.sport_type) && x.average_speed > 0 && x.start_date <= a.start_date)
+    .sort((x, y) => x.start_date.localeCompare(y.start_date)).slice(-LAST_COMPARE);
+  if (list.length < 3) return null;
+  const top = Math.max(...list.map((x) => x.average_speed));
+  const slot = 100 / list.length, width = slot * 0.62;
+  const svg = s("svg", { viewBox: "0 0 100 48", preserveAspectRatio: "none", role: "img", "aria-label": `${sport.paceLabel} oproti predchádzajúcim` },
+    ...list.map((x, i) => {
+      const height = Math.max((x.average_speed / top) * 46, 2);
+      return s("rect", { x: i * slot + (slot - width) / 2, y: 48 - height, width, height, rx: 1.2, fill: x === a ? sport.color : "var(--grid)" });
+    }));
+  const average = mean(list.filter((x) => x !== a).map((x) => sport.pace(x)));
+  return h("div", { class: "compare" }, svg,
+    h("div", { class: "sub" }, h("span", { text: `Posledných ${list.length}, vyššie je rýchlejšie` }), h("span", { text: `priemer ${sport.paceText(average)}` })));
+}
 function swimCard(swim) {
   const card = h("section", { class: "card" }, h("h2", { text: `Série, ${fullDate(swim.day)}` }),
     h("p", { class: "note", text: swim.blocks ? "Úseky a pauzy z dĺžok bazéna, ktoré zaznamenali hodinky." : swim.reliable ? "Série a pauzy rozpoznané z kôl Apple Watch." : "Starší formát záznamu, tempo aj série sú len odhad." }),
@@ -3104,7 +3174,7 @@ function overviewView(page) {
   if (page === "aktivita") {
     return [overviewNav(page), filters(), tiles(3, 6), h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)")), loadCard()];
   }
-  return [overviewNav(page), heroCard(), alertsCard(), weekCard()].filter(Boolean);
+  return [overviewNav(page), heroCard(), alertsCard(), weekCard(), lastWorkoutCard()].filter(Boolean);
 }
 function render() {
   const { page } = route();
