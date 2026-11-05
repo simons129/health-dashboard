@@ -170,6 +170,11 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .plan-line b { color: var(--ink); font-size: 14px; font-weight: 640; }
 .ex-body { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .ex-body svg { flex: none; width: 84px; height: 34px; overflow: visible; }
+.gains { display: grid; grid-template-columns: minmax(0, 1.3fr) repeat(4, minmax(0, 1fr)); gap: 6px 4px; margin: 6px 0 14px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.gains .head { color: var(--ink-2); font-size: 12px; text-align: right; }
+.gains .name { color: var(--ink-2); }
+.gains b { text-align: right; font-weight: 640; }
+.gains b small { display: block; font-size: 10.5px; font-weight: 450; color: var(--muted); }
 .muscle { display: grid; grid-template-columns: 76px minmax(0, 1fr) 112px; gap: 10px; align-items: center; margin-top: 9px; font-size: 13px; }
 .muscle .value { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .muscle .value b { color: var(--ink); font-weight: 620; }
@@ -1615,6 +1620,7 @@ function calendarView() {
 // best of the last six weeks, and the index is the median of all exercises done regularly, so one odd
 // exercise cannot pull it. Upper and lower body and each muscle group are medians of their exercises.
 const INDEX_WINDOW_DAYS = 42;
+const INDEX_GAIN_DAYS = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "Rok"]];
 const INDEX_MIN_SESSIONS = 4;
 const INDEX_MIN_EXERCISES = 3;
 const INDEX_JUMP = 1 + SUSPICIOUS_CHANGE / 100;
@@ -1658,7 +1664,21 @@ function strengthIndex(index) {
     const pick = (day) => { const since = addDays(day, -INDEX_WINDOW_DAYS); const v = list.map((e) => Math.max(-Infinity, ...e.points.filter((p) => p.day > since && p.day <= day).map((p) => p.value))).filter(Number.isFinite); return v.length ? median(v) : null; };
     return { name, now: pick(today), before: pick(ago), count: list.length };
   }).filter((m) => m.now != null).sort((a, b) => b.now - a.now);
-  return { series, muscles, exercises: exercises.length, now: at(groups.all, today), before: at(groups.all, ago) };
+  // How much stronger against a day back, in percent. Before the first data the comparison starts
+  // at the first day the group had an index.
+  const gains = INDEX_GAIN_DAYS.map(([days, label]) => {
+    const back = addDays(today, -days);
+    return { label, values: Object.fromEntries(Object.entries(groups).map(([key, list]) => {
+      const now = at(list, today);
+      let then = at(list, back), since = null;
+      if (then == null) {
+        const first = series.find((d) => d[key] != null && d.day >= back);
+        if (first && first.day < today) { then = first[key]; since = first.day; }
+      }
+      return [key, now != null && then ? { pct: (now / then - 1) * 100, since } : null];
+    })) };
+  });
+  return { series, muscles, gains, exercises: exercises.length, now: at(groups.all, today), before: at(groups.all, ago) };
 }
 function strengthIndexCard(index) {
   const result = strengthIndex(index);
@@ -1681,7 +1701,13 @@ function strengthIndexCard(index) {
     read: (i) => ({ title: `Týždeň ${fullDate(list[i].day)}`, rows: lines.filter(([key]) => list[i][key] != null).map(([key, label, color]) => ({ color, value: num(list[i][key]), label })) }),
   });
   const scale = Math.max(120, ...result.muscles.map((m) => m.now)) * 1.05;
-  card.append(legend(lines.map(([, label, color]) => ({ kind: "line", color, label }))), chart,
+  const pct = (v) => { const r = Math.round(v); return `${r > 0 ? "+" : r < 0 ? "−" : ""}${Math.abs(r)} %`; };
+  const gains = h("div", { class: "gains", role: "table", "aria-label": "O koľko si silnejší" },
+    h("span"), ...result.gains.map((g) => h("span", { class: "head", text: g.label })),
+    ...lines.flatMap(([key, label]) => [h("span", { class: "name", text: label }),
+      ...result.gains.map((g) => { const v = g.values[key]; return h("b", {}, v ? pct(v.pct) : "–", v?.since ? h("small", { text: `od ${shortDate(v.since)}` }) : null); })]));
+  card.append(h("div", { class: "group-head", text: "O koľko si silnejší" }), gains,
+    legend(lines.map(([, label, color]) => ({ kind: "line", color, label }))), chart,
     h("div", { class: "group-head", text: "Podľa partie" }),
     ...result.muscles.map((m) => h("div", { class: "muscle" },
       h("span", { text: m.name }),
