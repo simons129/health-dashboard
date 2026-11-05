@@ -246,6 +246,28 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .ai { margin: 10px 0; }
 .ai-text { white-space: pre-line; font-size: 14px; line-height: 1.5; margin: 6px 0; border-left: 3px solid var(--hrv); padding-left: 10px; }
 .ai-wait { color: var(--ink-2); font-size: 13px; }
+/* While an answer is on its way: dots, lines where the text will be and a bar filling over the usual time. */
+.ai-thinking { border-left: 3px solid var(--hrv); padding: 4px 0 6px 12px; margin: 6px 0; }
+.ai-thinking .head { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--ink-2); }
+.ai-dots { display: inline-flex; gap: 4px; }
+.ai-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--hrv); animation: ai-dot 1.2s ease-in-out infinite; }
+.ai-dots i:nth-child(2) { animation-delay: .15s; }
+.ai-dots i:nth-child(3) { animation-delay: .3s; }
+.ai-thinking .skel { height: 10px; border-radius: 5px; margin-top: 10px; background: linear-gradient(90deg, var(--wash) 20%, var(--grid) 50%, var(--wash) 80%); background-size: 250% 100%; animation: ai-shimmer 1.6s linear infinite; }
+.ai-progress { height: 3px; border-radius: 2px; background: var(--wash); margin-top: 14px; overflow: hidden; }
+.ai-progress i { display: block; height: 100%; background: var(--hrv); transform-origin: left; animation: ai-fill var(--duration) cubic-bezier(.15,.6,.3,1) var(--delay) forwards; transform: scaleX(0); }
+.ai-text.arrived, .summary.arrived { animation: fade-in .5s ease-out; }
+.summary.updating { animation: ai-pulse 1.8s ease-in-out infinite; }
+.hero-skel { margin: 14px 0 4px; }
+.hero-skel .skel { height: 11px; border-radius: 6px; margin-top: 9px; background: linear-gradient(90deg, rgba(255,255,255,.1) 20%, rgba(255,255,255,.28) 50%, rgba(255,255,255,.1) 80%); background-size: 250% 100%; animation: ai-shimmer 1.6s linear infinite; }
+@keyframes ai-dot { 0%, 80%, 100% { transform: scale(.55); opacity: .35; } 40% { transform: scale(1); opacity: 1; } }
+@keyframes ai-shimmer { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+@keyframes ai-fill { to { transform: scaleX(.96); } }
+@keyframes ai-pulse { 0%, 100% { opacity: .75; } 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) {
+  .ai-dots i, .ai-thinking .skel, .hero-skel .skel, .ai-text.arrived, .summary.arrived, .summary.updating { animation: none; }
+  .ai-progress i { animation: none; transform: scaleX(.5); }
+}
 .ai-q { font-weight: 620; font-size: 13.5px; margin-top: 12px; }
 .presets { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
 .ask { margin-top: 8px; }
@@ -2190,9 +2212,12 @@ async function waitForAnswer(id, key) {
     await new Promise((resolve) => setTimeout(resolve, ANSWER_POLL_MS));
     const doc = await api(`/api/ai_requests/${id}`);
     if (doc?.data.status !== "pending") {
-      state.ai = state.ai.map((item) => (item.id === id ? { ...item, ...doc.data } : item));
-      if (doc?.data.kind === "daily" && doc.data.answer) state.summary = { text: doc.data.answer, at: doc.updated_at };
+      state.ai = state.ai.map((item) => (item.id === id ? { ...item, ...doc.data, arrived: true } : item));
+      if (doc?.data.kind === "daily" && doc.data.answer) state.summary = { text: doc.data.answer, at: doc.updated_at, arrived: true };
       render();
+      // Only the render that brings the answer fades it in.
+      state.ai = state.ai.map((item) => (item.id === id ? { ...item, arrived: false } : item));
+      if (state.summary) state.summary.arrived = false;
       return;
     }
   }
@@ -2204,7 +2229,20 @@ const aiKey = (kind, ref) => `${kind}:${ref ?? ""}`;
 function isWaiting(record) {
   return record?.status === "pending" && Date.now() - Date.parse(record.created_at) < ANSWER_POLLS * ANSWER_POLL_MS;
 }
-const waitingNote = () => h("div", { class: "ai-wait", text: "Pripravujem odpoveď, trvá to asi 30 sekúnd…" });
+// The bar fills over the usual answer time and picks up where it was after a re-render.
+const AI_USUAL_SECONDS = 40;
+function waitingNote(record) {
+  const elapsed = record?.created_at ? Math.max(0, (Date.now() - Date.parse(record.created_at)) / 1000) : 0;
+  const late = elapsed > AI_USUAL_SECONDS;
+  const bar = h("i");
+  bar.style.setProperty("--duration", `${AI_USUAL_SECONDS}s`);
+  bar.style.setProperty("--delay", `-${Math.min(elapsed, AI_USUAL_SECONDS)}s`);
+  return h("div", { class: "ai-thinking", role: "status" },
+    h("div", { class: "head" }, h("span", { class: "ai-dots", "aria-hidden": "true" }, h("i"), h("i"), h("i")),
+      h("span", { text: late ? "Ešte chvíľu, tentoraz to trvá dlhšie…" : "Tréner premýšľa, zvyčajne do pol minúty…" })),
+    ...["92%", "78%", "56%"].map((width) => Object.assign(h("div", { class: "skel", "aria-hidden": "true" }), { style: `width:${width}` })),
+    h("div", { class: "ai-progress", "aria-hidden": "true" }, bar));
+}
 function aiErrorNote(key) {
   return state.aiError?.key === key ? h("p", { class: "write-error", text: state.aiError.text }) : null;
 }
@@ -2221,8 +2259,8 @@ function threadView(root) {
   const box = h("div", {});
   for (const reply of replies) {
     box.append(h("div", { class: "ai-q", text: reply.question }));
-    if (reply.status === "done") box.append(h("div", { class: "ai-text", text: reply.answer }));
-    else if (isWaiting(reply)) box.append(waitingNote());
+    if (reply.status === "done") box.append(h("div", { class: `ai-text${reply.arrived ? " arrived" : ""}`, text: reply.answer }));
+    else if (isWaiting(reply)) box.append(waitingNote(reply));
     else box.append(h("div", { class: "ai-wait", text: "Odpoveď neprišla." }));
   }
   const last = replies.at(-1) ?? root;
@@ -2256,8 +2294,8 @@ function aiBlock(kind, ref, label) {
   const box = h("div", { class: "ai" });
   const details = kind === "activity" && state.swims.get(ref) ? swimDetails(state.swims.get(ref)) : undefined;
   const button = (text) => h("button", { text, onclick: () => askAi({ kind, ref, details }, key) });
-  if (isWaiting(record)) box.append(waitingNote());
-  else if (record?.status === "done") box.append(h("div", { class: "ai-text", text: record.answer }), threadView(record), h("div", { class: "week-actions" }, button("Znova")));
+  if (isWaiting(record)) box.append(waitingNote(record));
+  else if (record?.status === "done") box.append(h("div", { class: `ai-text${record.arrived ? " arrived" : ""}`, text: record.answer }), threadView(record), h("div", { class: "week-actions" }, button("Znova")));
   else box.append(button(label));
   const error = aiErrorNote(key);
   if (error) box.append(error);
@@ -2279,8 +2317,8 @@ function coachView() {
   if (!questions.length) history.append(h("div", { class: "empty", text: "Zatiaľ žiadna otázka." }));
   questions.slice(0, 15).forEach((item, index) => {
     const open = state.openChats.has(item.id) || index === 0;
-    const body = item.status === "done" ? [h("div", { class: "ai-text", text: item.answer }), threadView(item)]
-      : [isWaiting(item) ? waitingNote() : h("div", { class: "ai-wait", text: "Odpoveď neprišla." })];
+    const body = item.status === "done" ? [h("div", { class: `ai-text${item.arrived ? " arrived" : ""}`, text: item.answer }), threadView(item)]
+      : [isWaiting(item) ? waitingNote(item) : h("div", { class: "ai-wait", text: "Odpoveď neprišla." })];
     history.append(h("details", { class: "muscle-group", ...(open ? { open: "" } : {}), ontoggle: (event) => { if (event.target.open) state.openChats.add(item.id); else state.openChats.delete(item.id); } },
       h("summary", { text: item.question }), ...body));
   });
@@ -2338,7 +2376,9 @@ function summaryBlock() {
   const box = h("div", { class: "hero-summary" });
   const refresh = () => askAi({ kind: "daily" }, key);
   const fresh = state.summary?.at && localDay(new Date(state.summary.at)) === localDay(new Date());
-  if (state.summary) box.append(h("p", { class: `summary${fresh ? "" : " stale"}`, text: state.summary.text }));
+  if (!state.summary && busy) box.append(h("div", { class: "hero-skel", "aria-hidden": "true" },
+    ...["94%", "86%", "58%"].map((width) => Object.assign(h("div", { class: "skel" }), { style: `width:${width}` }))));
+  if (state.summary) box.append(h("p", { class: `summary${fresh ? "" : " stale"}${busy ? " updating" : ""}${state.summary.arrived ? " arrived" : ""}`, text: state.summary.text }));
   const line = h("div", { class: "hero-meta" });
   if (state.summary || busy) {
     line.append(h("span", { text: busy ? "Aktualizujem sumár…" : `Sumár ${whenLabel(state.summary.at)}` }));
