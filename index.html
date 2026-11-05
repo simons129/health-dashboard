@@ -330,6 +330,20 @@ a.visit:hover .title { text-decoration: underline; }
 #tip .row span { color: var(--ink-2); }
 #tip .row i { width: 12px; height: 2px; border-radius: 1px; flex: none; }
 .loading .tiles, .loading .card { opacity: .55; }
+/* Fresh data on its way: a thin bar along the top. */
+#refresh-bar { position: fixed; z-index: 60; top: 0; left: 0; right: 0; height: 3px; overflow: hidden; pointer-events: none; }
+#refresh-bar i { position: absolute; top: 0; bottom: 0; width: 40%; background: var(--hrv); border-radius: 2px; animation: refresh-run 1.1s ease-in-out infinite; }
+@keyframes refresh-run { from { left: -40%; } to { left: 100%; } }
+/* Pull down at the top of a page to load fresh data. */
+#pull { position: fixed; z-index: 61; top: calc(env(safe-area-inset-top, 0px) - 44px); left: 50%; width: 38px; height: 38px; margin-left: -19px; border-radius: 50%;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0,0,0,.2); color: var(--hrv); display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; }
+#pull svg { width: 20px; height: 20px; }
+#pull.ready { color: var(--ink); }
+#pull.spinning svg { animation: spin .9s linear infinite; }
+#pull.settle { transition: transform .25s ease, opacity .25s ease; }
+.data-status { display: flex; align-items: center; gap: 8px; margin: -6px 0 12px; font-size: 12.5px; color: var(--ink-2); }
+.data-status i { width: 8px; height: 8px; border-radius: 50%; background: var(--warning); flex: none; }
+@media (prefers-reduced-motion: reduce) { #refresh-bar i { animation: none; left: 0; width: 100%; opacity: .6; } #pull.spinning svg { animation: none; } }
 /* Shown from the HTML itself until the first data arrives: a heartbeat drawing itself. */
 .splash { min-height: 82vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; }
 .splash svg { width: 150px; height: 64px; margin-bottom: 10px; overflow: visible; }
@@ -466,6 +480,8 @@ nav.tabs svg { display: none; }
 </style>
 </head>
 <body>
+<div id="refresh-bar" hidden><i></i></div>
+<div id="pull" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v13M6 11l6 6 6-6"/></svg></div>
 <main id="app"><div class="splash" role="status">
   <svg viewBox="0 0 150 64" aria-hidden="true">
     <path class="trace" pathLength="100" d="M2 36 H44 L52 36 L60 12 L70 56 L80 22 L86 36 H148"/>
@@ -688,6 +704,38 @@ async function write(method, path, body) {
   });
   if (!res.ok) throw new Error(`API ${res.status}`);
 }
+// The last loaded data is kept on the phone, so the app opens at once with what it showed before and
+// then brings it up to date. Logging out deletes it.
+const SNAPSHOT_KEYS = ["trend", "dayDoc", "dayExtra", "readiness", "recovery", "readinessSpan", "strength", "workouts", "activities", "summary", "appleLast",
+  "ai", "plans", "swims", "totals", "rest", "weight", "vo2", "fat", "lean"];
+let dataDb = null;
+function openDataDb() {
+  dataDb ??= new Promise((resolve) => {
+    try {
+      const open = indexedDB.open("zdravie-data", 1);
+      open.onupgradeneeded = () => open.result.createObjectStore("snapshot");
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => resolve(null);
+    } catch { resolve(null); }
+  });
+  return dataDb;
+}
+async function snapshotStore(mode, act) {
+  const db = await openDataDb();
+  if (!db) return undefined;
+  return new Promise((resolve) => {
+    try {
+      const request = act(db.transaction("snapshot", mode).objectStore("snapshot"));
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(undefined);
+    } catch { resolve(undefined); }
+  });
+}
+const readSnapshot = () => snapshotStore("readonly", (store) => store.get("last"));
+const saveSnapshot = () => snapshotStore("readwrite", (store) => store.put({
+  at: Date.now(), day: state.day, data: Object.fromEntries(SNAPSHOT_KEYS.map((key) => [key, state[key]])) }, "last"));
+const clearSnapshot = () => snapshotStore("readwrite", (store) => store.clear());
+
 async function api(path) {
   const res = await fetch(API + path, { headers: { Authorization: `Bearer ${apiKey}` } });
   if (res.status === 401) { logout(); throw new Error("unauthorized"); }
@@ -2352,12 +2400,31 @@ function refreshIcon() {
   return s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("path", { d: "M20 11a8 8 0 1 0-2.3 6.3M20 5v6h-6" }));
 }
 // Fresh data when coming back to the app, without disturbing someone who is typing.
+const loadAll = () => Promise.all([loadTrend(), loadDay(), loadReadiness(), loadBody()]);
+// Fresh data in the background while the page stays usable. Without a signal the page keeps what
+// it has and says from when.
+let syncing = null;
+function syncData() {
+  if (syncing) return syncing;
+  const bar = document.getElementById("refresh-bar");
+  bar.hidden = false;
+  syncing = loadAll()
+    .then(() => { state.loadedAt = Date.now(); state.cachedAt = null; state.offline = false; render(); saveSnapshot(); })
+    .catch((error) => { if (error.message !== "unauthorized") { state.offline = true; render(); } })
+    .finally(() => { bar.hidden = true; syncing = null; });
+  return syncing;
+}
 async function reloadData(force) {
   const typing = ["TEXTAREA", "INPUT"].includes(document.activeElement?.tagName);
   if (!state.trend || !apiKey || typing || (!force && Date.now() - state.loadedAt < RELOAD_GAP_MS)) return;
   state.loadedAt = Date.now();
-  await Promise.all([loadTrend(), loadDay(), loadReadiness(), loadBody()]);
-  render();
+  await syncData();
+}
+function dataStatus() {
+  if (!state.cachedAt && !state.offline) return null;
+  const when = state.cachedAt ? whenLabel(new Date(state.cachedAt).toISOString()) : null;
+  return h("div", { class: "data-status", role: "status" }, h("i"),
+    state.offline ? `Bez pripojenia${when ? `, dáta ${when}` : ""}. Potiahni nadol pre obnovenie.` : `Dáta ${when}, aktualizujem…`);
 }
 async function watchSync() {
   const before = state.appleLast;
@@ -3569,7 +3636,7 @@ function render() {
   const settings = h("a", { class: "gear", href: "#/nastavenia", "aria-label": "Nastavenia" }, s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("circle", { cx: 12, cy: 12, r: 3 }), s("path", { d: "M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3" })));
   const head = h("header", {}, h("h1", { text: "Zdravie" }), settings);
   const views = { sila: strengthView, vytrvalost: sportView, trener: coachView, kalendar: calendarView, nastavenia: settingsView };
-  app.replaceChildren(head, tabs(page), ...(views[page]?.() ?? overviewView(page)));
+  app.replaceChildren(head, tabs(page), dataStatus() ?? "", ...(views[page]?.() ?? overviewView(page)));
   drawCharts();
   enhance();
   app.querySelector(".scroll-to")?.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "nearest" });
@@ -3600,11 +3667,26 @@ function selectDay(day) {
   state.day = day;
   refresh(() => Promise.all([loadDay(), loadTrend(), readinessCovers() ? null : loadReadiness()]));
 }
-const start = () => refresh(() => Promise.all([loadTrend(), loadDay(), loadReadiness(), loadBody()]));
+async function start() {
+  const snapshot = await readSnapshot();
+  if (!snapshot) {
+    await refresh(loadAll);
+    if (state.trend) saveSnapshot();
+    return;
+  }
+  Object.assign(state, snapshot.data);
+  // Yesterday's day view would show under today's date, it waits for the fresh one.
+  if (snapshot.day !== state.day) { state.dayDoc = null; state.dayExtra = null; }
+  state.cachedAt = snapshot.at;
+  state.loadedAt = 0;
+  render();
+  syncData();
+}
 
 function logout() {
   apiKey = "";
   saveKey("");
+  clearSnapshot();
   login();
 }
 function login(message) {
@@ -3635,6 +3717,41 @@ addEventListener("keydown", (event) => { if (event.key === "Escape" && route().p
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") reloadData().catch(() => {});
+});
+
+// Pull down from the very top to load fresh data. A pull that starts on a chart scrubs the chart,
+// and an open day sheet keeps its own scrolling.
+const PULL_READY = 70, PULL_MAX = 110;
+const pull = document.getElementById("pull");
+let pullFrom = null, pulled = 0;
+function placePull(distance) {
+  const y = Math.min(distance, PULL_MAX);
+  pull.style.transform = `translateY(${y + 44}px) rotate(${Math.min(distance / PULL_READY, 1) * 180}deg)`;
+  pull.style.opacity = String(Math.min(distance / PULL_READY, 1));
+  pull.classList.toggle("ready", distance >= PULL_READY);
+}
+addEventListener("touchstart", (event) => {
+  if (scrollY > 0 || event.touches.length !== 1 || syncing || !state.trend || event.target.closest(".chart, .panel.sheet, textarea, input")) return;
+  pullFrom = { x: event.touches[0].clientX, y: event.touches[0].clientY };
+  pull.classList.remove("settle", "spinning");
+}, { passive: true });
+addEventListener("touchmove", (event) => {
+  if (!pullFrom) return;
+  const dx = event.touches[0].clientX - pullFrom.x, dy = event.touches[0].clientY - pullFrom.y;
+  if (dy <= 0 || Math.abs(dx) > dy || scrollY > 0) { pulled = 0; placePull(0); return; }
+  pulled = dy * 0.55;
+  placePull(pulled);
+}, { passive: true });
+addEventListener("touchend", () => {
+  if (!pullFrom) return;
+  pullFrom = null;
+  pull.classList.add("settle");
+  if (pulled < PULL_READY) { pulled = 0; placePull(0); return; }
+  pulled = 0;
+  pull.style.transform = "translateY(64px)";
+  pull.classList.add("spinning");
+  state.loadedAt = 0;
+  syncData().finally(() => { pull.classList.remove("spinning"); placePull(0); });
 });
 
 let resizeTimer;
