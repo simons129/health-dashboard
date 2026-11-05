@@ -217,6 +217,17 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .primary:hover { background: var(--ink); opacity: .85; }
 .plan { padding: 10px 0; border-top: 1px solid var(--grid); }
 .goal { padding: 12px 0; border-top: 1px solid var(--grid); }
+.route-map { height: 230px; border-radius: 12px; overflow: hidden; margin: 10px 0 6px; background: var(--wash); position: relative; z-index: 0; }
+.route-map .leaflet-control-attribution { font-size: 9.5px; background: rgba(255,255,255,.7); }
+@media (prefers-color-scheme: dark) { .route-map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9); } }
+.detail-label { font-size: 12.5px; color: var(--ink-2); margin: 14px 0 2px; display: flex; justify-content: space-between; }
+.zone-bar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; gap: 2px; margin: 6px 0 4px; }
+.zone-bar i { display: block; height: 100%; }
+.splits { display: grid; gap: 4px; margin-top: 6px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.split { display: grid; grid-template-columns: 34px minmax(0, 1fr) 58px 52px; gap: 8px; align-items: center; }
+.split .bar { height: 10px; border-radius: 5px; }
+.split span:last-child, .split b { text-align: right; }
+.split b { font-weight: 620; }
 .goal-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .goal-head .title { font-weight: 640; font-size: 14.5px; }
 .goal-head .link { min-height: 26px; font-size: 18px; line-height: 1; color: var(--muted); }
@@ -666,7 +677,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true, goals: [], goalForm: null };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true, goals: [], goalForm: null, details: new Map() };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -1083,10 +1094,12 @@ function frame(el, height, ticks, label, tickText) {
   });
   return { svg, plot, y };
 }
-function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, zones = [], domain, regions = [], markers = [], gap, label, read, tickText }) {
+function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, zones = [], domain, invert, regions = [], markers = [], gap, label, read, tickText }) {
   const all = series.flatMap((sr) => sr.values).concat(band ? [...band.lo, ...band.hi] : []).filter((v) => v != null);
   const pad = (Math.max(...all) - Math.min(...all)) * 0.08 || 2;
   const ticks = domain ? niceTicks(domain[0], domain[1]) : niceTicks(Math.min(...all) - pad, Math.max(...all) + pad);
+  // Pace reads faster up, the axis runs from the slowest at the bottom.
+  if (invert) ticks.reverse();
   const { svg, plot, y } = frame(el, height, ticks, label, tickText);
   const px = (v) => plot.x + ((v - xMin) / (xMax - xMin || 1)) * plot.w;
   const low = ticks[0], high = ticks[ticks.length - 1];
@@ -1669,7 +1682,9 @@ function dayPanel(day, list, { sheet = false, opening = false } = {}) {
     const label = a.sport_type === "WeightTraining" ? workout?.region ?? "Sila" : SPORT_NAMES[a.sport_type] ?? a.sport_type;
     const facts = [hours(duration(a)), a.distance ? `${num(a.distance / 1000, 1)} km` : null, a.average_heartrate ? `${num(a.average_heartrate)} bpm` : null, `námaha ${effortText(a)}`].filter(Boolean).join(" · ");
     const body = [h("div", { class: "title", text: `${mark} ${label}` }), h("div", { class: "sub", text: a.name }), h("div", { class: "sub", text: facts })];
-    card.append(workout ? h("a", { class: "visit", href: workoutHref(workout.id) }, ...body) : h("div", { class: "visit" }, ...body),
+    const sportKey = Object.entries(SPORTS).find(([, item]) => item.types.includes(a.sport_type))?.[0];
+    const href = workout ? workoutHref(workout.id) : sportKey ? `#/vytrvalost/${sportKey}/${a.id}` : null;
+    card.append(href ? h("a", { class: "visit", href }, ...body) : h("div", { class: "visit" }, ...body),
       workout ? aiBlock("workout", workout.id, "Zhodnotiť tréning") : aiBlock("activity", String(a.id), "Zhodnotiť tréning"));
   }
   card.append(h("a", { class: "more", href: "#/telo", text: "Tep a HRV v tento deň ›", onclick: () => { state.day = day; state.bodyDay = true; Promise.all([loadDay(), loadTrend()]).then(render); } }));
@@ -2357,11 +2372,27 @@ function swimDetails(swim) {
     parts: swim.parts ? swim.parts.map(part) : swim.sets.map((set) => ({ repeats: set.repeats, distanceMeters: set.distance, swimTime: clockShort(set.swim), restBetween: clockShort(set.rest) })),
   } };
 }
+// A run's or ride's kilometres, time in zones and drift, as the detail shows them.
+const AI_SPLITS = 60;
+function streamDetails(detail) {
+  const { splits = [], hr_seconds: seconds = {} } = detail.stream;
+  const hrMax = trainingBase().hrMax;
+  const limits = [hrMax * ZONES.easy[1], hrMax * ZONES.hard[0]];
+  const minutes = [0, 0, 0];
+  for (const [bpm, secs] of Object.entries(seconds)) minutes[Number(bpm) < limits[0] ? 0 : Number(bpm) < limits[1] ? 1 : 2] += secs / 60;
+  return { workout: {
+    note: "Kilometre a pásma zo sekundových dát Stravy. Drift: o koľko klesla rýchlosť na úder srdca v druhej polovici, pod 5 % je dobrá aeróbna báza.",
+    heartRateDriftPercent: detail.drift == null ? null : Math.round(detail.drift * 10) / 10,
+    minutesInZones: Object.fromEntries(INTENSITY_ZONES.map((z, i) => [z.label, Math.round(minutes[i])])),
+    zoneLimitsBpm: hrMax ? limits.map(Math.round) : null,
+    splits: splits.slice(0, AI_SPLITS).map((sp) => ({ km: sp.km, time: clockShort(sp.seconds), hr: sp.hr, climb: sp.climb })),
+  } };
+}
 function aiBlock(kind, ref, label) {
   const key = aiKey(kind, ref);
   const record = state.ai.find((item) => aiKey(item.kind, item.ref) === key && item.status !== "failed");
   const box = h("div", { class: "ai" });
-  const details = kind === "activity" && state.swims.get(ref) ? swimDetails(state.swims.get(ref)) : undefined;
+  const details = kind !== "activity" ? undefined : state.swims.get(ref) ? swimDetails(state.swims.get(ref)) : state.details.get(ref)?.stream ? streamDetails(state.details.get(ref)) : undefined;
   const button = (text) => h("button", { text, onclick: () => askAi({ kind, ref, details }, key) });
   if (isWaiting(record)) box.append(waitingNote(record));
   else if (record?.status === "done") box.append(h("div", { class: `ai-text${record.arrived ? " arrived" : ""}`, text: record.answer }), threadView(record), h("div", { class: "week-actions" }, button("Znova")));
@@ -2753,14 +2784,172 @@ function intensityView(nav) {
 }
 function activityCard(sport, a) {
   const day = a.start_date_local.slice(0, 10);
-  return h("section", { class: "card" }, h("h2", { text: a.name }), h("p", { class: "note", text: fullDate(day) }),
+  const detail = activityDetail(a);
+  return h("section", { class: "card" }, h("h2", { text: a.name }), h("p", { class: "note keep", text: `${fullDate(day)} · ${a.start_date_local.slice(11, 16)}` }),
     h("div", { class: "facts" },
       fact("Vzdialenosť", num(a.distance / 1000, 1), "km"), fact("Čas", hours(a.moving_time)), fact("Námaha", effortText(a)),
       fact(sport.paceLabel, sport.paceText(sport.pace(a))),
       a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null,
-      a.total_elevation_gain ? fact("Stúpanie", num(a.total_elevation_gain), "m") : null),
+      a.total_elevation_gain ? fact("Stúpanie", num(a.total_elevation_gain), "m") : null,
+      detail?.drift != null ? fact("Tepový drift", `${num(detail.drift, 1)} %`) : null),
+    routeMap(detail),
+    ...workoutCharts(sport, a, detail),
     aiBlock("activity", String(a.id), "Zhodnotiť tréning"),
     h("a", { class: "more", href: `#/kalendar/${day}`, text: "Otvoriť deň v kalendári ›" }));
+}
+// The opened run or ride loads its streams and route once, the card draws what has arrived.
+function activityDetail(a) {
+  const id = String(a.id);
+  const cached = state.details.get(id);
+  if (cached) return cached.loading ? null : cached;
+  state.details.set(id, { loading: true });
+  Promise.all([api(`/api/strava_streams/${id}`), api(`/api/strava_activities/${id}`)])
+    .then(([stream, full]) => {
+      const data = stream?.data ?? null;
+      state.details.set(id, { stream: data, route: decodePolyline(full?.data.map?.summary_polyline ?? ""), drift: data ? heartDrift(data.points) : null });
+      if (route().id === id) render();
+    })
+    .catch(() => state.details.delete(id));
+  return null;
+}
+// Google's encoded polyline, the way Strava sends a route.
+function decodePolyline(text) {
+  const points = [];
+  let index = 0, lat = 0, lng = 0;
+  while (index < text.length) {
+    for (const axis of [0, 1]) {
+      let shift = 0, result = 0, byte;
+      do { byte = text.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+      const delta = result & 1 ? ~(result >> 1) : result >> 1;
+      if (axis) lng += delta; else lat += delta;
+    }
+    points.push([lat / 1e5, lng / 1e5]);
+  }
+  return points;
+}
+// Heart rate drift: speed per heartbeat in the second half against the first. Under 5 % the
+// aerobic base carries the pace, more means the heart worked harder for the same speed.
+const DRIFT_MIN_SECONDS = 40 * 60;
+function heartDrift(points) {
+  const { time, hr, speed } = points;
+  if (!time?.length || !hr?.length || !speed?.length || time.at(-1) < DRIFT_MIN_SECONDS) return null;
+  const half = time.at(-1) / 2;
+  const ratio = (from, to) => {
+    let v = 0, b = 0;
+    time.forEach((t, i) => { if (t >= from && t < to && hr[i] > 0 && speed[i] > 0.5) { v += speed[i]; b += hr[i]; } });
+    return b ? v / b : null;
+  };
+  const first = ratio(0, half), second = ratio(half, Infinity);
+  return first && second ? ((first - second) / first) * 100 : null;
+}
+let leaflet = null;
+function loadLeaflet() {
+  leaflet ??= new Promise((resolve, reject) => {
+    const css = h("link", { rel: "stylesheet", href: "https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" });
+    const js = h("script", { src: "https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" });
+    js.onload = () => resolve(window.L);
+    js.onerror = () => { leaflet = null; reject(new Error("map")); };
+    document.head.append(css, js);
+  });
+  return leaflet;
+}
+// A still map of the route on OpenStreetMap, the page scrolls over it.
+function routeMap(detail) {
+  if (!detail?.route?.length) return null;
+  const el = h("div", { class: "route-map", role: "img", "aria-label": "Mapa trasy" });
+  el.draw = () => loadLeaflet().then((L) => {
+    // The map measures its box, that is right only once the page has laid it out.
+    const fit = (map, line) => requestAnimationFrame(() => { map.invalidateSize(); map.fitBounds(line.getBounds(), { padding: [18, 18] }); });
+    if (el._map) { fit(el._map, el._line); return; }
+    const map = L.map(el, { dragging: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, zoomControl: false, attributionControl: true });
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
+    const line = L.polyline(detail.route, { color: "#e34948", weight: 4, opacity: 0.9 }).addTo(map);
+    L.circleMarker(detail.route[0], { radius: 6, color: "#fff", weight: 2, fillColor: "#1baf7a", fillOpacity: 1 }).addTo(map);
+    L.circleMarker(detail.route.at(-1), { radius: 6, color: "#fff", weight: 2, fillColor: "#e34948", fillOpacity: 1 }).addTo(map);
+    el._map = map;
+    el._line = line;
+    fit(map, line);
+  }).catch(() => el.replaceChildren(h("div", { class: "empty", text: "Mapu sa nepodarilo načítať." })));
+  return el;
+}
+// Pace or speed, heart rate with its zones and the climb along the way, then zones and kilometres.
+function workoutCharts(sport, a, detail) {
+  if (!detail) return [h("p", { class: "note keep", text: "Načítavam priebeh tréningu…" })];
+  const data = detail.stream;
+  if (!data) return [h("p", { class: "note keep", text: "Priebeh tréningu zo Stravy sa ešte len sťahuje, objaví sa po najbližšej synchronizácii." })];
+  const p = data.points;
+  const hasDistance = p.distance?.length && p.distance.at(-1) > 0;
+  const x = hasDistance ? p.distance.map((m) => m / 1000) : p.time.map((t) => t / 60);
+  const xMax = x.at(-1) || 1;
+  const step = xMax > 60 ? 20 : xMax > 25 ? 10 : xMax > 10 ? 5 : xMax > 4 ? 2 : 1;
+  const xTicks = [];
+  for (let v = 0; v <= xMax + 1e-9; v += step) xTicks.push({ v, label: `${num(v)}${v ? (hasDistance ? " km" : " min") : ""}`, anchor: v ? "middle" : "start" });
+  const at = (i) => (hasDistance ? `${num(x[i], 1)} km` : `${Math.round(x[i])}. min`);
+  const run = sport.lowerIsFaster;
+  const paceValues = (p.speed ?? []).map((v) => (v > 0.5 ? (run ? 1000 / v : v * 3.6) : null));
+  const out = [];
+  const chart = (title, height, options) => {
+    const el = h("div", { class: "chart" });
+    el.draw = () => lineChart(el, { height, x, xMin: 0, xMax, xTicks, ...options });
+    out.push(h("div", { class: "detail-label", text: title }), el);
+  };
+  if (paceValues.some((v) => v != null)) {
+    chart(run ? "Tempo, vyššie je rýchlejšie" : "Rýchlosť", 150, {
+      series: [{ color: sport.color, values: paceValues }], invert: run, tickText: run ? clockShort : (v) => num(v),
+      label: run ? "Tempo v priebehu" : "Rýchlosť v priebehu",
+      read: (i) => ({ title: at(i), rows: [{ color: sport.color, value: paceValues[i] == null ? "stojíš" : run ? `${clockShort(paceValues[i])} /km` : `${num(paceValues[i], 1)} km/h` }] }),
+    });
+  }
+  const hrMax = trainingBase().hrMax;
+  const limits = [hrMax * ZONES.easy[1], hrMax * ZONES.hard[0]];
+  if (p.hr?.some((v) => v > 0)) {
+    chart("Tep", 150, {
+      series: [{ color: "var(--hr)", values: p.hr.map((v) => v || null) }],
+      zones: hrMax ? [{ from: 0, to: limits[0], color: INTENSITY_ZONES[0].color }, { from: limits[0], to: limits[1], color: INTENSITY_ZONES[1].color }, { from: limits[1], to: 300, color: INTENSITY_ZONES[2].color }] : [],
+      label: "Tep v priebehu",
+      read: (i) => ({ title: at(i), rows: [{ color: "var(--hr)", value: p.hr[i] ? `${p.hr[i]} bpm` : "–" }] }),
+    });
+  }
+  if (p.altitude?.length && Math.max(...p.altitude) - Math.min(...p.altitude) >= 10) {
+    chart("Prevýšenie", 90, {
+      series: [{ color: "var(--muted)", values: p.altitude }], label: "Nadmorská výška",
+      read: (i) => ({ title: at(i), rows: [{ value: `${num(p.altitude[i])} m n. m.` }] }),
+    });
+  }
+  // Time in each zone, from every second of heart rate.
+  const seconds = Object.entries(data.hr_seconds ?? {});
+  if (seconds.length && hrMax) {
+    const inZone = [0, 0, 0];
+    for (const [bpm, secs] of seconds) inZone[Number(bpm) < limits[0] ? 0 : Number(bpm) < limits[1] ? 1 : 2] += secs;
+    const total = inZone.reduce((sum, v) => sum + v, 0) || 1;
+    out.push(h("div", { class: "detail-label", text: "Čas v pásmach" }),
+      h("div", { class: "zone-bar", role: "img", "aria-label": INTENSITY_ZONES.map((z, i) => `${z.label} ${Math.round(inZone[i] / 60)} min`).join(", ") },
+        ...INTENSITY_ZONES.map((z, i) => inZone[i] ? Object.assign(h("i"), { style: `flex:${inZone[i]};background:${z.color}` }) : null)),
+      legend(INTENSITY_ZONES.map((z, i) => ({ color: z.color, label: `${z.label} ${Math.round(inZone[i] / 60)} min (${Math.round((inZone[i] / total) * 100)} %)` }))));
+  }
+  // Kilometres, rides in fives, bar length by pace and color by heart rate zone.
+  const group = run ? 1 : 5;
+  const splits = [];
+  for (const split of data.splits ?? []) {
+    const last = splits.at(-1);
+    if (last && last.count < group) { last.seconds += split.seconds; last.km = split.km; last.hrSum += (split.hr ?? 0) * split.seconds; last.hrTime += split.hr ? split.seconds : 0; last.count++; }
+    else splits.push({ km: split.km, from: last?.km ?? 0, seconds: split.seconds, hrSum: (split.hr ?? 0) * split.seconds, hrTime: split.hr ? split.seconds : 0, count: 1 });
+  }
+  if (splits.length > 1) {
+    const paceOf = (sp) => (run ? sp.seconds / (sp.km - sp.from) : ((sp.km - sp.from) / sp.seconds) * 3600);
+    const values = splits.map(paceOf);
+    const best = run ? Math.min(...values) : Math.max(...values), worst = run ? Math.max(...values) : Math.min(...values);
+    out.push(h("div", { class: "detail-label" }, h("span", { text: run ? "Kilometre" : "Po 5 km" }), h("span", { text: run ? "tempo · tep" : "rýchlosť · tep" })),
+      h("div", { class: "splits" }, ...splits.map((sp, i) => {
+        const hr = sp.hrTime ? Math.round(sp.hrSum / sp.hrTime) : null;
+        const zoneColor = hr == null || !hrMax ? "var(--grid)" : INTENSITY_ZONES[hr < limits[0] ? 0 : hr < limits[1] ? 1 : 2].color;
+        const share = best === worst ? 1 : 0.35 + 0.65 * (run ? (worst - values[i]) / (worst - best) : (values[i] - worst) / (best - worst));
+        return h("div", { class: "split" }, h("span", { text: num(sp.km, sp.km % 1 ? 1 : 0) }),
+          h("div", {}, Object.assign(h("div", { class: "bar" }), { style: `width:${share * 100}%;background:${zoneColor}` })),
+          h("b", { text: run ? clockShort(values[i]) : num(values[i], 1) }), h("span", { text: hr ? `${hr} bpm` : "–" }));
+      })));
+  }
+  return out;
 }
 // The latest workout with the picture that suits it: exercises for strength, sets for a swim,
 // and for a run or ride how it compares with the ones before.
@@ -3663,7 +3852,7 @@ function loadCard(kind = "hours") {
 const app = document.getElementById("app");
 function drawCharts() {
   hideTip();
-  app.querySelectorAll(".chart").forEach((el) => el.draw?.());
+  app.querySelectorAll(".chart, .route-map").forEach((el) => el.draw?.());
 }
 function filters() {
   return h("div", { class: "filters" },
