@@ -308,6 +308,19 @@ a.visit:hover .title { text-decoration: underline; }
 #tip .row span { color: var(--ink-2); }
 #tip .row i { width: 12px; height: 2px; border-radius: 1px; flex: none; }
 .loading .tiles, .loading .card { opacity: .55; }
+/* Shown from the HTML itself until the first data arrives: a heartbeat drawing itself. */
+.splash { min-height: 82vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; }
+.splash svg { width: 150px; height: 64px; margin-bottom: 10px; overflow: visible; }
+.splash .trace { fill: none; stroke: var(--grid); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.splash .beat { fill: none; stroke: var(--hr); stroke-width: 3.5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 34 66; animation: beat 1.5s linear infinite; }
+.splash b { font-size: 22px; font-weight: 680; color: var(--ink); animation: rise .5s ease-out backwards; }
+.splash span { font-size: 13px; color: var(--ink-2); animation: rise .5s ease-out .15s backwards; }
+@keyframes beat { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) {
+  .splash .beat { animation: none; stroke-dasharray: none; }
+  .splash b, .splash span { animation: none; }
+}
 .login { max-width: 360px; margin: 14vh auto 0; }
 .login form { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
 .login input { width: 100%; }
@@ -431,7 +444,14 @@ nav.tabs svg { display: none; }
 </style>
 </head>
 <body>
-<main id="app"></main>
+<main id="app"><div class="splash" role="status">
+  <svg viewBox="0 0 150 64" aria-hidden="true">
+    <path class="trace" pathLength="100" d="M2 36 H44 L52 36 L60 12 L70 56 L80 22 L86 36 H148"/>
+    <path class="beat" pathLength="100" d="M2 36 H44 L52 36 L60 12 L70 56 L80 22 L86 36 H148"/>
+  </svg>
+  <b>Zdravie</b>
+  <span>Načítavam dáta…</span>
+</div></main>
 <div id="tip" hidden></div>
 
 <script>
