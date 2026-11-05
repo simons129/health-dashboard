@@ -1,7 +1,7 @@
 // Keeps the app shell available on a poor signal. The network wins when it answers in time, so a
 // new version shows on the next open, and a slow signal falls back to the saved page. API requests
 // do not pass through here, the page keeps its own copy of the last data in IndexedDB.
-const CACHE = "zdravie-shell-v2";
+const CACHE = "zdravie-shell-v3";
 const NETWORK_WAIT_MS = 2500;
 const SHELL = ["./", "manifest.webmanifest", "icons/apple-touch-icon.png", "icons/icon-192.png", "icons/icon-512.png"];
 
@@ -21,7 +21,8 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   if (request.method !== "GET" || new URL(request.url).origin !== location.origin) return;
   const key = request.mode === "navigate" ? "./" : request;
-  const network = fetch(request).then((response) => {
+  // GitHub Pages lets browsers keep a page for 10 minutes, asking the server every time shows a new version at once.
+  const network = fetch(request, { cache: "no-cache" }).then((response) => {
     if (response.ok) {
       const copy = response.clone();
       caches.open(CACHE).then((cache) => cache.put(key, copy));
