@@ -1114,7 +1114,7 @@ function frame(el, height, ticks, label, tickText) {
   });
   return { svg, plot, y };
 }
-function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, zones = [], domain, invert, regions = [], markers = [], gap, label, read, tickText }) {
+function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, zones = [], domain, invert, regions = [], markers = [], gap, label, read, tickText, onPoint }) {
   const all = series.flatMap((sr) => sr.values).concat(band ? [...band.lo, ...band.hi] : []).filter((v) => v != null);
   const pad = (Math.max(...all) - Math.min(...all)) * 0.08 || 2;
   const ticks = domain ? niceTicks(domain[0], domain[1]) : niceTicks(Math.min(...all) - pad, Math.max(...all) + pad);
@@ -1182,10 +1182,11 @@ function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, zone
     marker.setAttribute("cx", cx);
     if (v != null) { marker.setAttribute("cy", y(v)); marker.setAttribute("visibility", "visible"); } else marker.setAttribute("visibility", "hidden");
     const { title, rows } = read(i);
+    onPoint?.(i);
     const box = svg.getBoundingClientRect();
     showTip(event, { left: box.left + cx * (box.width / svg.viewBox.baseVal.width), top: box.top + 30, width: 0 }, title, rows);
   };
-  const clear = () => { cross.setAttribute("visibility", "hidden"); marker.setAttribute("visibility", "hidden"); hideTip(); };
+  const clear = () => { cross.setAttribute("visibility", "hidden"); marker.setAttribute("visibility", "hidden"); hideTip(); onPoint?.(null); };
   scrubbing(svg, (event) => {
     const box = svg.getBoundingClientRect();
     const at = xMin + (((event.clientX - box.left) * (svg.viewBox.baseVal.width / box.width) - plot.x) / plot.w) * (xMax - xMin);
@@ -2875,9 +2876,19 @@ function loadLeaflet() {
   });
   return leaflet;
 }
-// A still map of the route on OpenStreetMap, the page scrolls over it.
+// Where a moment of a chart was: a dot on the map that follows the finger.
+let routeCursor = null;
+function moveRouteCursor(position) {
+  if (!routeCursor) return;
+  if (position) routeCursor.setLatLng(position).setStyle({ opacity: 1, fillOpacity: 1 });
+  else routeCursor.setStyle({ opacity: 0, fillOpacity: 0 });
+}
+// A still map of the route on OpenStreetMap, the page scrolls over it. With the streams the route
+// is drawn from every point, otherwise from Strava's simplified line.
 function routeMap(detail) {
-  if (!detail?.route?.length) return null;
+  const points = detail?.stream?.points?.latlng?.filter((p) => p?.length === 2);
+  const route = points?.length > 1 ? points : detail?.route;
+  if (!route?.length) return null;
   const el = h("div", { class: "route-map", role: "img", "aria-label": "Mapa trasy" });
   el.draw = () => loadLeaflet().then((L) => {
     // The map measures its box, that is right only once the page has laid it out.
@@ -2885,9 +2896,10 @@ function routeMap(detail) {
     if (el._map) { fit(el._map, el._line); return; }
     const map = L.map(el, { dragging: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, zoomControl: false, attributionControl: true });
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
-    const line = L.polyline(detail.route, { color: "#e34948", weight: 4, opacity: 0.9 }).addTo(map);
-    L.circleMarker(detail.route[0], { radius: 6, color: "#fff", weight: 2, fillColor: "#1baf7a", fillOpacity: 1 }).addTo(map);
-    L.circleMarker(detail.route.at(-1), { radius: 6, color: "#fff", weight: 2, fillColor: "#e34948", fillOpacity: 1 }).addTo(map);
+    const line = L.polyline(route, { color: "#e34948", weight: 4, opacity: 0.9 }).addTo(map);
+    L.circleMarker(route[0], { radius: 6, color: "#fff", weight: 2, fillColor: "#1baf7a", fillOpacity: 1 }).addTo(map);
+    L.circleMarker(route.at(-1), { radius: 6, color: "#fff", weight: 2, fillColor: "#e34948", fillOpacity: 1 }).addTo(map);
+    routeCursor = L.circleMarker(route[0], { radius: 8, color: "#fff", weight: 3, fillColor: "#6250d6", opacity: 0, fillOpacity: 0 }).addTo(map);
     el._map = map;
     el._line = line;
     fit(map, line);
@@ -2899,6 +2911,7 @@ function workoutCharts(sport, a, detail) {
   if (!detail) return [h("p", { class: "note keep", text: "Načítavam priebeh tréningu…" })];
   const data = detail.stream;
   if (!data) return [h("p", { class: "note keep", text: "Priebeh tréningu zo Stravy sa ešte len sťahuje, objaví sa po najbližšej synchronizácii." })];
+  const hint = data.points.latlng?.length ? [h("p", { class: "note keep", text: "Ťahaj prstom po grafe, bod na mape ukáže, kde si vtedy bol." })] : [];
   const p = data.points;
   const hasDistance = p.distance?.length && p.distance.at(-1) > 0;
   const x = hasDistance ? p.distance.map((m) => m / 1000) : p.time.map((t) => t / 60);
@@ -2918,11 +2931,14 @@ function workoutCharts(sport, a, detail) {
   const smooth = moving.map((v, i) => { if (v == null) return null; const near = moving.slice(Math.max(0, i - PACE_SMOOTH), i + PACE_SMOOTH + 1).filter((x) => x != null); return mean(near); });
   const paceValues = smooth.map((v) => (v == null || !paceDomain ? v : Math.min(Math.max(v, paceDomain[0]), paceDomain[1])));
   const out = [];
+  const positions = p.latlng?.length === x.length ? p.latlng : null;
+  const onPoint = positions ? (i) => moveRouteCursor(i == null ? null : positions[i]) : undefined;
   const chart = (title, height, options) => {
     const el = h("div", { class: "chart" });
-    el.draw = () => lineChart(el, { height, x, xMin: 0, xMax, xTicks, ...options });
+    el.draw = () => lineChart(el, { height, x, xMin: 0, xMax, xTicks, onPoint, ...options });
     out.push(h("div", { class: "detail-label", text: title }), el);
   };
+  out.push(...hint);
   if (paceValues.some((v) => v != null)) {
     chart(run ? "Tempo, vyššie je rýchlejšie" : "Rýchlosť", 150, {
       series: [{ color: sport.color, values: paceValues }], invert: run, domain: paceDomain, tickText: run ? clockShort : (v) => num(v),
