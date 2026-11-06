@@ -142,6 +142,10 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .ex .before { font-size: 12px; color: var(--ink-2); margin-top: 4px; }
 .fact .delta { font-size: 12px; color: var(--ink-2); margin-top: 1px; }
 .compare-line { font-size: 13px; margin: 8px 0 2px; }
+.day-context { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.day-context .label { width: 100%; font-size: 12.5px; color: var(--ink-2); }
+.day-context span.item { display: inline-flex; align-items: center; gap: 5px; border-radius: 8px; background: var(--wash); padding: 3px 8px; font-size: 12.5px; }
+.day-context span.item i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .sets { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .sets span { background: var(--wash); border-radius: 5px; padding: 1px 7px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .subnav { margin-bottom: 12px; max-width: 100%; overflow-x: auto; white-space: nowrap; }
@@ -1588,6 +1592,7 @@ function workoutPane(workout, index) {
       fact("Cviky", String(workout.exercises.length)), workout.time && fact("Čas", workout.time),
       activity?.average_heartrate ? fact("Tep", num(activity.average_heartrate), "bpm") : null,
       activity ? fact("Námaha", effortText(activity)) : null),
+    contextRow(workout.day, ["WeightTraining"], workout.id),
     aiBlock("workout", workout.id, "Zhodnotiť tréning"),
     h("p", { class: "hint", text: "Pri každom cviku je zmena oproti minulému razu: viac váhy, alebo pri rovnakej váhe viac opakovaní. Pod cvikom je, čo si mal minule. Klikni na cvik pre jeho históriu." }));
   const changes = [];
@@ -2293,6 +2298,43 @@ function planDone(plan) {
 }
 const PLAN_MARKS = { upper: "💪", lower: "🦵", full: "🏋️" };
 const planMark = (plan) => (plan.sport === "sila" ? PLAN_MARKS[plan.type] : PLAN_SPORTS[plan.sport].mark);
+// How the body stood before a workout and whether it was planned: scores of the day, HRV and resting
+// heart rate against your normal range, the form of the morning, the plan, and the days since the last
+// workout of the same kind.
+function trainingContext(day, types, id) {
+  const items = [];
+  const rec = state.recovery.find((d) => d.day === day), ready = state.readiness.find((d) => d.day === day);
+  const zone = (v) => (v >= 67 ? "good" : v >= 34 ? "warning" : "critical");
+  if (rec) items.push({ tone: zone(rec.score), text: `Recovery ${rec.score}` });
+  if (ready) items.push({ tone: zone(ready.score), text: `Pripravenosť ${ready.score}` });
+  const against = (value, band, higherIsBetter) => (!band ? "muted" : value >= band[0] && value <= band[1] ? "muted" : (value > band[1]) === higherIsBetter ? "good" : "warning");
+  const hrv = state.trend?.hrv.find((d) => d.day === day);
+  if (hrv) {
+    const band = normalRange(state.trend.hrv, (r) => r.avg, day);
+    items.push({ tone: against(hrv.avg, band, true), text: `HRV ${num(hrv.avg)} ms${band ? (hrv.avg > band[1] ? " nad normou" : hrv.avg < band[0] ? " pod normou" : "") : ""}` });
+  }
+  const rest = state.rest.find((d) => d.day === day);
+  if (rest) {
+    const band = normalRange(state.rest, (r) => r.bpm, day);
+    items.push({ tone: against(rest.bpm, band, false), text: `Pokojový tep ${rest.bpm}${band ? (rest.bpm > band[1] ? " nad normou" : rest.bpm < band[0] ? " pod normou" : "") : ""}` });
+  }
+  const morning = fitnessSeries().find((d) => d.day === addDays(day, -1));
+  if (morning) {
+    const [, label, tone] = FORM_ZONES.find(([min]) => morning.form >= min);
+    items.push({ tone, text: `Forma ${morning.form >= 0 ? "+" : "−"}${num(Math.abs(morning.form))} (${label.toLowerCase()})` });
+  }
+  const plan = plansOn(day).find((p) => PLAN_SPORTS[p.sport]?.types.some((t) => types.includes(t)));
+  items.push(plan ? { tone: "good", text: `Podľa plánu: ${plan.title}` } : { tone: "muted", text: "Mimo plánu" });
+  const before = state.activities.filter((x) => types.includes(x.sport_type) && x.start_date_local.slice(0, 10) < day && String(x.id) !== String(id))
+    .sort((x, y) => y.start_date.localeCompare(x.start_date))[0];
+  if (before) items.push({ tone: "muted", text: `${plural(daysBetween(before.start_date_local.slice(0, 10), day), "deň", "dni", "dní")} od minulého` });
+  return items;
+}
+function contextRow(day, types, id) {
+  const items = trainingContext(day, types, id);
+  return h("div", { class: "day-context" }, h("span", { class: "label", text: "Pred tréningom" }),
+    ...items.map((item) => h("span", { class: "item" }, Object.assign(h("i"), { style: `background:var(--${item.tone})` }), item.text)));
+}
 function plansOn(day) {
   return state.plans.filter((plan) => plan.day === day);
 }
@@ -2502,11 +2544,21 @@ function streamDetails(detail) {
     splits: splits.slice(0, AI_SPLITS).map((sp) => ({ km: sp.km, time: clockShort(sp.seconds), hr: sp.hr, climb: sp.climb })),
   } };
 }
+// What the evaluation of a workout gets beside the stored data: its sets or streams and the day around it.
+function evaluationDetails(kind, ref) {
+  const activity = state.activities.find((a) => String(a.id) === String(ref));
+  const workout = kind === "workout" ? state.workouts.find((w) => w.id === ref) : null;
+  const day = workout?.day ?? activity?.start_date_local.slice(0, 10);
+  const types = workout ? ["WeightTraining"] : activity ? [activity.sport_type] : [];
+  const extra = kind !== "activity" ? {} : state.swims.get(ref) ? swimDetails(state.swims.get(ref)) : state.details.get(ref)?.stream ? streamDetails(state.details.get(ref)) : {};
+  const context = day ? trainingContext(day, types, ref).map((item) => item.text) : [];
+  return context.length || Object.keys(extra).length ? { ...extra, beforeWorkout: context } : undefined;
+}
 function aiBlock(kind, ref, label) {
   const key = aiKey(kind, ref);
   const record = state.ai.find((item) => aiKey(item.kind, item.ref) === key && item.status !== "failed");
   const box = h("div", { class: "ai" });
-  const details = kind !== "activity" ? undefined : state.swims.get(ref) ? swimDetails(state.swims.get(ref)) : state.details.get(ref)?.stream ? streamDetails(state.details.get(ref)) : undefined;
+  const details = kind === "activity" || kind === "workout" ? evaluationDetails(kind, ref) : undefined;
   const button = (text) => h("button", { text, onclick: () => askAi({ kind, ref, details }, key) });
   if (isWaiting(record)) box.append(waitingNote(record));
   else if (record?.status === "done") box.append(h("div", { class: `ai-text${record.arrived ? " arrived" : ""}`, text: record.answer }), threadView(record), h("div", { class: "week-actions" }, button("Znova")));
@@ -2911,6 +2963,7 @@ function activityCard(sport, a) {
     ...workoutCharts(sport, a, detail),
     bestEffortsCard(sport, a, detail),
     sameRouteCard(sport, a, detail),
+    contextRow(day, sport.types, a.id),
     aiBlock("activity", String(a.id), "Zhodnotiť tréning"),
     h("a", { class: "more", href: `#/kalendar/${day}`, text: "Otvoriť deň v kalendári ›" }));
 }
@@ -3608,6 +3661,7 @@ function swimCard(swim) {
       fact("Plávanie", hours(swim.swimSeconds)),
       fact("Pauzy", hours(swim.restSeconds)),
       fact("Tempo", swim.pace == null ? "–" : `${clockShort(swim.pace)} /100 m`)),
+    contextRow(swim.day, ["Swim"], swim.id),
     aiBlock("activity", swim.id, "Zhodnotiť tréning"));
   if (swim.parts) {
     const chart = h("div", { class: "chart" });
