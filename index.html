@@ -220,6 +220,10 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .route-map { height: 230px; border-radius: 12px; overflow: hidden; margin: 10px 0 6px; background: var(--wash); position: relative; z-index: 0; }
 .route-map .leaflet-control-attribution { font-size: 9.5px; background: rgba(255,255,255,.7); }
 @media (prefers-color-scheme: dark) { .route-map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9); } }
+.map-modes { margin: 12px 0 0; }
+.map-modes button { min-height: 32px; font-size: 13px; }
+.map-key { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); margin: 2px 0 4px; }
+.map-key .ramp { flex: 1; height: 8px; border-radius: 4px; }
 .detail-label { font-size: 12.5px; color: var(--ink-2); margin: 14px 0 2px; display: flex; justify-content: space-between; }
 .zone-bar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; gap: 2px; margin: 6px 0 4px; }
 .zone-bar i { display: block; height: 100%; }
@@ -697,7 +701,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true, goals: [], goalForm: null, details: new Map(), hrZones: null };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true, goals: [], goalForm: null, details: new Map(), hrZones: null, mapMode: "pace" };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -2821,7 +2825,7 @@ function activityCard(sport, a) {
       a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null,
       a.total_elevation_gain ? fact("Stúpanie", num(a.total_elevation_gain), "m") : null,
       detail?.drift != null ? fact("Tepový drift", `${num(detail.drift, 1)} %`) : null),
-    routeMap(detail),
+    routeMap(detail, sport),
     ...workoutCharts(sport, a, detail),
     aiBlock("activity", String(a.id), "Zhodnotiť tréning"),
     h("a", { class: "more", href: `#/kalendar/${day}`, text: "Otvoriť deň v kalendári ›" }));
@@ -2893,10 +2897,47 @@ function moveRouteCursor(position) {
 }
 // A still map of the route on OpenStreetMap, the page scrolls over it. With the streams the route
 // is drawn from every point, otherwise from Strava's simplified line.
-function routeMap(detail) {
+// The route coloured by pace against this workout's median, or by heart rate zone. Leaflet
+// paints SVG attributes, which take no CSS variables, so colours are resolved first.
+const PACE_COLORS = ["#1a9850", "#91cf60", "#fee08b", "#fc8d59", "#d73027"];
+const PACE_STEPS = [-6, -2, 2, 6];
+const STOP_COLOR = "#9c9a92";
+const MAP_MODES = [["pace", "Tempo"], ["zones", "Zóny"], ["plain", "Trasa"]];
+function resolveColor(css) {
+  const probe = h("i", { style: `color:${css};display:none` });
+  document.body.append(probe);
+  const color = getComputedStyle(probe).color;
+  probe.remove();
+  return color;
+}
+// A colour for each point of the route, or null for one colour.
+function routeColors(stream, mode) {
+  const p = stream?.points;
+  if (!p?.latlng?.length || mode === "plain") return null;
+  if (mode === "zones") {
+    const zones = hrZones();
+    if (!zones || !p.hr?.some((v) => v > 0)) return null;
+    const colors = HR_ZONE_COLORS.map(resolveColor);
+    return p.hr.map((v) => (v > 0 ? colors[zoneIndexOf(v, zones)] : STOP_COLOR));
+  }
+  const speed = p.speed ?? [];
+  const smooth = speed.map((v, i) => { const near = speed.slice(Math.max(0, i - PACE_SMOOTH), i + PACE_SMOOTH + 1).filter((x) => x > STOP_SPEED); return v > STOP_SPEED && near.length ? mean(near) : null; });
+  const middle = median(smooth.filter((v) => v != null));
+  if (!middle) return null;
+  // Faster than the median is green: a share of speed above it.
+  return smooth.map((v) => {
+    if (v == null) return STOP_COLOR;
+    const slower = ((middle - v) / middle) * 100;
+    return PACE_COLORS[PACE_STEPS.filter((step) => slower > step).length];
+  });
+}
+function routeMap(detail, sport) {
   const points = detail?.stream?.points?.latlng?.filter((p) => p?.length === 2);
   const route = points?.length > 1 ? points : detail?.route;
   if (!route?.length) return null;
+  const hasStream = points?.length > 1 && points.length === detail.stream.points.latlng.length;
+  const mode = hasStream ? state.mapMode ?? "pace" : "plain";
+  const colors = hasStream ? routeColors(detail.stream, mode) : null;
   const el = h("div", { class: "route-map", role: "img", "aria-label": "Mapa trasy" });
   el.draw = () => loadLeaflet().then((L) => {
     // The map measures its box, that is right only once the page has laid it out.
@@ -2904,7 +2945,16 @@ function routeMap(detail) {
     if (el._map) { fit(el._map, el._line); return; }
     const map = L.map(el, { dragging: false, touchZoom: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, zoomControl: false, attributionControl: true });
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
-    const line = L.polyline(route, { color: "#e34948", weight: 4, opacity: 0.9 }).addTo(map);
+    const line = L.polyline(route, { color: "#e34948", weight: 4, opacity: colors ? 0 : 0.9 }).addTo(map);
+    // Neighbouring points of one colour share a line, a few dozen lines instead of hundreds.
+    if (colors) {
+      let start = 0;
+      for (let i = 1; i <= route.length; i++) {
+        if (i < route.length && colors[i] === colors[start]) continue;
+        L.polyline(route.slice(start, Math.min(i + 1, route.length)), { color: colors[start], weight: 5, opacity: 0.95, lineCap: "round" }).addTo(map);
+        start = i;
+      }
+    }
     L.circleMarker(route[0], { radius: 6, color: "#fff", weight: 2, fillColor: "#1baf7a", fillOpacity: 1 }).addTo(map);
     L.circleMarker(route.at(-1), { radius: 6, color: "#fff", weight: 2, fillColor: "#e34948", fillOpacity: 1 }).addTo(map);
     routeCursor = L.circleMarker(route[0], { radius: 8, color: "#fff", weight: 3, fillColor: "#6250d6", opacity: 0, fillOpacity: 0 }).addTo(map);
@@ -2912,7 +2962,17 @@ function routeMap(detail) {
     el._line = line;
     fit(map, line);
   }).catch(() => el.replaceChildren(h("div", { class: "empty", text: "Mapu sa nepodarilo načítať." })));
-  return el;
+  if (!hasStream) return el;
+  const modes = h("div", { class: "seg map-modes", role: "group", "aria-label": "Farba trasy" }, ...MAP_MODES.map(([id, label]) =>
+    h("button", { type: "button", "aria-pressed": String(mode === id), text: label, onclick: () => { state.mapMode = id; render(); } })));
+  const run = sport?.lowerIsFaster;
+  const key = mode === "pace" && colors ? h("div", { class: "map-key" }, h("span", { text: run ? "rýchlejšie" : "rýchlejšie" }),
+      Object.assign(h("span", { class: "ramp" }), { style: `background:linear-gradient(90deg, ${PACE_COLORS.join(", ")})` }), h("span", { text: "pomalšie" }),
+      Object.assign(h("i"), { style: `width:10px;height:10px;border-radius:50%;background:${STOP_COLOR}` }), h("span", { text: "stojíš" }))
+    : mode === "zones" && colors ? legend(HR_ZONE_COLORS.map((color, i) => ({ color, label: `Z${i + 1}` })))
+    : null;
+  const wrap = h("div", {}, modes, el, key);
+  return wrap;
 }
 // Pace or speed, heart rate with its zones and the climb along the way, then zones and kilometres.
 function workoutCharts(sport, a, detail) {
