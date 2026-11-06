@@ -540,6 +540,11 @@ nav.tabs::-webkit-scrollbar { display: none; }
 .journal .amount input { width: 110px; min-height: 34px; }
 .journal textarea { width: 100%; min-height: 54px; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; resize: vertical; }
 .journal .group-head { margin-top: 10px; }
+.feel { margin: 10px 0 6px; padding-top: 10px; border-top: 1px solid var(--grid); }
+.feel .rpe { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; margin: 6px 0 4px; }
+.feel .rpe button { min-height: 32px; padding: 0; border-radius: 8px; font-size: 13px; }
+.feel .rpe button[aria-pressed=true] { background: var(--hrv); border-color: var(--hrv); color: #fff; font-weight: 650; }
+.feel .meaning { font-size: 12.5px; color: var(--ink-2); margin-bottom: 6px; }
 .journal-line { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; }
 .journal-line .link { font-size: 13px; }
 .effect { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 46px; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--grid); font-size: 13.5px; }
@@ -753,7 +758,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true, goals: [], goalForm: null, details: new Map(), hrZones: null, mapMode: "pace", efforts: new Map(), journal: new Map(), journalSettings: { custom: [], hidden: [] }, journalDrafts: {}, journalOpen: false, journalDay: null, meals: [] };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true, goals: [], goalForm: null, details: new Map(), hrZones: null, mapMode: "pace", efforts: new Map(), journal: new Map(), journalSettings: { custom: [], hidden: [] }, journalDrafts: {}, journalOpen: false, journalDay: null, meals: [], feel: new Map(), feelDrafts: {}, feelOpen: null };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -813,7 +818,7 @@ async function write(method, path, body) {
 // The last loaded data is kept on the phone, so the app opens at once with what it showed before and
 // then brings it up to date. Logging out deletes it.
 const SNAPSHOT_KEYS = ["trend", "dayDoc", "dayExtra", "readiness", "recovery", "readinessSpan", "strength", "workouts", "activities", "summary", "appleLast",
-  "ai", "plans", "goals", "hrZones", "efforts", "stravaLast", "journal", "journalSettings", "meals", "swims", "totals", "rest", "weight", "vo2", "fat", "lean"];
+  "ai", "plans", "goals", "hrZones", "efforts", "stravaLast", "journal", "journalSettings", "feel", "meals", "swims", "totals", "rest", "weight", "vo2", "fat", "lean"];
 let dataDb = null;
 function openDataDb() {
   dataDb ??= new Promise((resolve) => {
@@ -877,7 +882,7 @@ async function loadDay() {
 const lastPerDay = (rows) => [...new Map(rows.map((r) => [r.day, r])).values()];
 async function loadBody() {
   const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
-  const [totals, rest, weight, vo2, fat, lean, swims, plans, goals, zones, journal, journalSettings, meals, stravaStatus, streams, summary, aiDocs, heart] = await Promise.all([
+  const [totals, rest, weight, vo2, fat, lean, swims, plans, goals, zones, journal, journalSettings, workoutNotes, meals, stravaStatus, streams, summary, aiDocs, heart] = await Promise.all([
     items("/api/apple_daily_totals?sort=date&order=desc&limit=1000"),
     items("/api/apple_resting_heart_rate?sort=day&order=asc&limit=1000"),
     items("/api/apple_weight?sort=day&order=asc&limit=1000"),
@@ -890,6 +895,7 @@ async function loadBody() {
     api("/api/settings/hr_zones"),
     api(`/api/journal?gte.day=${addDays(localDay(new Date()), -JOURNAL_HISTORY_DAYS)}&sort=day&order=desc&limit=1000`).then((r) => r.items).catch(() => []),
     api("/api/settings/journal").catch(() => null),
+    api(`/api/workout_notes?gte.day=${addDays(localDay(new Date()), -JOURNAL_HISTORY_DAYS)}&limit=1000`).then((r) => r.items).catch(() => []),
     api(`/api/apple_nutrition?gte.day=${addDays(localDay(new Date()), -JOURNAL_HISTORY_DAYS)}&limit=1000`).then((r) => r.items.map((d) => d.data)).catch(() => []),
     api("/strava/status").catch(() => null),
     api("/api/strava_streams?limit=1000&omit=points,hr_seconds,splits").then((r) => r.items),
@@ -905,6 +911,7 @@ async function loadBody() {
   state.hrZones = zones?.data.zones ?? null;
   state.journal = new Map(journal.map((doc) => [doc.id, doc.data]));
   state.journalSettings = journalSettings?.data ?? { custom: [], hidden: [] };
+  state.feel = new Map(workoutNotes.map((doc) => [doc.id, doc.data]));
   state.meals = meals;
   state.stravaLast = stravaStatus?.lastSync ?? state.stravaLast ?? null;
   state.efforts = new Map(streams.filter((doc) => doc.data.best).map((doc) => [doc.id, { type: doc.data.sport_type, start: doc.data.start_date, best: doc.data.best }]));
@@ -1635,6 +1642,7 @@ function workoutPane(workout, index) {
       activity?.average_heartrate ? fact("Tep", num(activity.average_heartrate), "bpm") : null,
       activity ? fact("Námaha", effortText(activity)) : null),
     contextRow(workout.day, ["WeightTraining"], workout.id),
+    feelForm(workout.id, workout.day, "WeightTraining"),
     aiBlock("workout", workout.id, "Zhodnotiť tréning"),
     h("p", { class: "hint", text: "Pri každom cviku je zmena oproti minulému razu: viac váhy, alebo pri rovnakej váhe viac opakovaní. Pod cvikom je, čo si mal minule. Klikni na cvik pre jeho históriu." }));
   const changes = [];
@@ -2470,6 +2478,47 @@ function journalForm(day) {
     saved || state.journalOpen ? h("button", { type: "button", class: "link", text: "Zavrieť", onclick: () => { delete state.journalDrafts[day]; state.journalOpen = false; render(); } }) : null));
   return box;
 }
+// How hard a workout felt, RPE 1–10 (Borg CR10), with an optional note. Filled in with the usual
+// RPE for that sport so an ordinary workout is one tap.
+const RPE_WORDS = ["", "veľmi ľahké", "ľahké", "mierne", "trochu ťažké", "ťažšie", "ťažké", "veľmi ťažké", "veľmi veľmi ťažké", "takmer maximum", "maximum"];
+const DEFAULT_RPE = 5;
+function usualRpe(types) {
+  const values = [...state.feel.values()].filter((e) => types.includes(e.sport_type)).sort((a, b) => b.day.localeCompare(a.day)).slice(0, 10).map((e) => e.rpe);
+  return values.length ? Math.round(median(values)) : DEFAULT_RPE;
+}
+async function saveFeel(id) {
+  const draft = state.feelDrafts[id];
+  const entry = { ...draft, saved_at: new Date().toISOString() };
+  delete entry.dirty;
+  try {
+    await write("PUT", `/api/workout_notes/${id}`, entry);
+    state.feel.set(id, entry);
+    delete state.feelDrafts[id];
+    state.feelOpen = null;
+    saveSnapshot();
+  } catch {
+    state.feelError = "Záznam sa nepodarilo uložiť. Skús to znova.";
+  }
+  render();
+}
+function feelForm(id, day, sportType) {
+  id = String(id);
+  const saved = state.feel.get(id);
+  if (saved && state.feelOpen !== id) {
+    return h("div", { class: "feel journal-line" }, h("span", { text: `Pocit: RPE ${saved.rpe} · ${RPE_WORDS[saved.rpe]}${saved.note ? ` · ${saved.note}` : ""}` }),
+      h("button", { type: "button", class: "link", text: "Upraviť", onclick: () => { state.feelOpen = id; render(); } }));
+  }
+  const draft = (state.feelDrafts[id] ??= structuredClone(saved ?? { day, sport_type: sportType, rpe: usualRpe([sportType]), note: "" }));
+  const pick = (v) => { draft.rpe = v; draft.dirty = true; render(); };
+  return h("div", { class: "feel" }, h("div", { class: "detail-label" }, h("span", { text: "Ako to išlo?" }), h("span", { text: "námaha 1–10" })),
+    h("div", { class: "rpe", role: "group", "aria-label": "Námaha 1 až 10" }, ...Array.from({ length: 10 }, (_, i) => i + 1).map((v) =>
+      h("button", { type: "button", "aria-pressed": String(draft.rpe === v), text: String(v), "aria-label": `${v}, ${RPE_WORDS[v]}`, onclick: () => pick(v) }))),
+    h("div", { class: "meaning", text: `${draft.rpe} · ${RPE_WORDS[draft.rpe]}` }),
+    h("div", { class: "journal" }, h("textarea", { placeholder: "Poznámka (nepovinná)", "aria-label": "Poznámka k tréningu", oninput: (e) => { draft.note = e.target.value; draft.dirty = true; } }, draft.note ?? "")),
+    state.feelError ? h("p", { class: "write-error", text: state.feelError }) : null,
+    h("div", { class: "week-actions" }, h("button", { type: "button", class: "primary", text: draft.dirty || saved ? "Uložiť" : "OK", onclick: () => saveFeel(id) }),
+      saved ? h("button", { type: "button", class: "link", text: "Zavrieť", onclick: () => { delete state.feelDrafts[id]; state.feelOpen = null; render(); } }) : null));
+}
 // A saved entry in one line.
 function journalSummary(entry) {
   const parts = [`😴 ${num(entry.sleepHours, 1)} h`, `spánok ${entry.sleep}`, `energia ${entry.energy}`];
@@ -2785,7 +2834,9 @@ function evaluationDetails(kind, ref) {
   const types = workout ? ["WeightTraining"] : activity ? [activity.sport_type] : [];
   const extra = kind !== "activity" ? {} : state.swims.get(ref) ? swimDetails(state.swims.get(ref)) : state.details.get(ref)?.stream ? streamDetails(state.details.get(ref)) : {};
   const context = day ? trainingContext(day, types, ref).map((item) => item.text) : [];
-  return context.length || Object.keys(extra).length ? { ...extra, beforeWorkout: context } : undefined;
+  const feel = state.feel.get(String(ref));
+  const felt = feel ? { perceivedExertion: `RPE ${feel.rpe}/10, ${RPE_WORDS[feel.rpe]}`, ...(feel.note ? { athleteNote: feel.note } : {}) } : {};
+  return context.length || Object.keys(extra).length || feel ? { ...extra, ...felt, beforeWorkout: context } : undefined;
 }
 function aiBlock(kind, ref, label) {
   const key = aiKey(kind, ref);
@@ -3229,6 +3280,7 @@ function activityCard(sport, a) {
     bestEffortsCard(sport, a, detail),
     sameRouteCard(sport, a, detail),
     contextRow(day, sport.types, a.id),
+    feelForm(a.id, day, a.sport_type),
     aiBlock("activity", String(a.id), "Zhodnotiť tréning"),
     h("a", { class: "more", href: `#/kalendar/${day}`, text: "Otvoriť deň v kalendári ›" }));
 }
@@ -3885,6 +3937,7 @@ function lastWorkoutCard() {
   } else {
     card.append(h("div", { class: "facts" }, fact("Čas", hours(duration(a))), a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null, fact("Námaha", effortText(a))));
   }
+  card.append(feelForm(a.id, day, a.sport_type));
   card.append(workout ? aiBlock("workout", workout.id, "Zhodnotiť tréning") : aiBlock("activity", String(a.id), "Zhodnotiť tréning"));
   return card;
 }
@@ -3897,6 +3950,7 @@ function swimCard(swim) {
       fact("Pauzy", hours(swim.restSeconds)),
       fact("Tempo", swim.pace == null ? "–" : `${clockShort(swim.pace)} /100 m`)),
     contextRow(swim.day, ["Swim"], swim.id),
+    feelForm(swim.id, swim.day, "Swim"),
     aiBlock("activity", swim.id, "Zhodnotiť tréning"));
   if (swim.parts) {
     const chart = h("div", { class: "chart" });
