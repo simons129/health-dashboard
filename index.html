@@ -166,8 +166,6 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .last-ex .title { font-weight: 600; font-size: 13.5px; }
 .last-ex .sets { margin-top: 3px; }
 .last-ex .badge { flex: none; font-size: 12px; color: var(--ink-2); }
-.compare svg { display: block; width: 100%; height: 48px; margin-top: 4px; }
-.compare .sub { color: var(--ink-2); font-size: 12.5px; display: flex; justify-content: space-between; }
 .swim-part { padding: 10px 0; border-top: 1px solid var(--grid); }
 .swim-part .head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .swim-part .title { font-weight: 650; font-size: 15px; }
@@ -2971,17 +2969,39 @@ function intensityView(nav) {
   return [nav, filter, info, aiBlock("intensity", null, "Zhodnotiť intenzitu"), h("div", { class: "grid3" }, zoneSummary("Spolu", list), zoneSummary("Beh", list.filter((r) => r.sport === "beh")), zoneSummary("Bicykel", list.filter((r) => r.sport === "bicykel"))),
     weekly, activities, note].filter(Boolean);
 }
+// The same facts wherever a run or ride shows, in its detail and as the latest workout.
+function workoutFacts(sport, a, detail) {
+  return h("div", { class: "facts" },
+    fact("Vzdialenosť", num(a.distance / 1000, 1), "km"), fact("Čas", hours(a.moving_time)), fact("Námaha", effortText(a)),
+    fact(sport.paceLabel, sport.paceText(sport.pace(a))),
+    a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null,
+    a.total_elevation_gain ? fact("Stúpanie", num(a.total_elevation_gain), "m") : null,
+    detail?.flatPace ? fact("Tempo na rovine", `${clockShort(detail.flatPace)} /km`) : null,
+    detail?.drift != null ? fact("Tepový drift", `${num(detail.drift, 1)} %`) : null);
+}
+// Time in each of Strava's five zones, from every second of heart rate. Zones above the highest one
+// reached are left out.
+function zoneSection(data) {
+  const zones = hrZones();
+  const seconds = Object.entries(data?.hr_seconds ?? {});
+  if (!seconds.length || !zones) return [];
+  const inZone = [0, 0, 0, 0, 0];
+  for (const [bpm, secs] of seconds) inZone[zoneIndexOf(Number(bpm), zones)] += secs;
+  const total = inZone.reduce((sum, v) => sum + v, 0) || 1;
+  const shown = zones.slice(0, inZone.findLastIndex((v) => v >= 30) + 1 || 1);
+  const range = ([from, to]) => (to == null ? `od ${from}` : from ? `${from}–${to}` : `do ${to}`);
+  return [h("div", { class: "detail-label" }, h("span", { text: "Čas v zónach" }), h("span", { text: state.hrZones ? "zóny zo Stravy" : "odhad zón" })),
+    h("div", { class: "zone-bar", role: "img", "aria-label": inZone.map((v, i) => `zóna ${i + 1} ${Math.round(v / 60)} min`).join(", ") },
+      ...inZone.map((v, i) => v ? Object.assign(h("i"), { style: `flex:${v};background:${HR_ZONE_COLORS[i]}` }) : null)),
+    h("div", { class: "splits" }, ...shown.map((z, i) => h("div", { class: "split" }, h("span", { text: `Z${i + 1}` }),
+      h("div", {}, Object.assign(h("div", { class: "bar" }), { style: `width:${Math.max((inZone[i] / total) * 100, inZone[i] ? 2 : 0)}%;background:${HR_ZONE_COLORS[i]}` })),
+      h("b", { text: `${Math.round(inZone[i] / 60)} min` }), h("span", { text: range(z) }))))];
+}
 function activityCard(sport, a) {
   const day = a.start_date_local.slice(0, 10);
   const detail = activityDetail(a);
   return h("section", { class: "card" }, h("h2", { text: a.name }), h("p", { class: "note keep", text: `${fullDate(day)} · ${a.start_date_local.slice(11, 16)}` }),
-    h("div", { class: "facts" },
-      fact("Vzdialenosť", num(a.distance / 1000, 1), "km"), fact("Čas", hours(a.moving_time)), fact("Námaha", effortText(a)),
-      fact(sport.paceLabel, sport.paceText(sport.pace(a))),
-      a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null,
-      a.total_elevation_gain ? fact("Stúpanie", num(a.total_elevation_gain), "m") : null,
-      detail?.flatPace ? fact("Tempo na rovine", `${clockShort(detail.flatPace)} /km`) : null,
-      detail?.drift != null ? fact("Tepový drift", `${num(detail.drift, 1)} %`) : null),
+    workoutFacts(sport, a, detail),
     routeMap(detail, sport),
     ...workoutCharts(sport, a, detail),
     bestEffortsCard(sport, a, detail),
@@ -3005,7 +3025,7 @@ function activityDetail(a) {
       state.details.set(id, { stream: data, route: line, drift: data ? heartDrift(data.points) : null,
         factors, flatPace: factors ? flatPace(data.points, factors) : null, mates: sameRoute(a, line, routes),
         intervals: data && RUN_TYPES.has(a.sport_type) ? detectIntervals(data.points, factors) : null });
-      if (route().id === id) render();
+      if (route().id === id || route().page === "prehlad") render();
     })
     .catch(() => state.details.delete(id));
   return null;
@@ -3417,20 +3437,7 @@ function workoutCharts(sport, a, detail) {
     });
   }
   if (detail.intervals) out.push(intervalsCard(detail.intervals));
-  // Time in each of Strava's five zones, from every second of heart rate.
-  const seconds = Object.entries(data.hr_seconds ?? {});
-  if (seconds.length && zones) {
-    const inZone = [0, 0, 0, 0, 0];
-    for (const [bpm, secs] of seconds) inZone[zoneIndexOf(Number(bpm), zones)] += secs;
-    const total = inZone.reduce((sum, v) => sum + v, 0) || 1;
-    const range = ([from, to]) => (to == null ? `od ${from}` : from ? `${from}–${to}` : `do ${to}`);
-    out.push(h("div", { class: "detail-label" }, h("span", { text: "Čas v zónach" }), h("span", { text: state.hrZones ? "zóny zo Stravy" : "odhad zón" })),
-      h("div", { class: "zone-bar", role: "img", "aria-label": inZone.map((v, i) => `zóna ${i + 1} ${Math.round(v / 60)} min`).join(", ") },
-        ...inZone.map((v, i) => v ? Object.assign(h("i"), { style: `flex:${v};background:${HR_ZONE_COLORS[i]}` }) : null)),
-      h("div", { class: "splits" }, ...zones.map((z, i) => h("div", { class: "split" }, h("span", { text: `Z${i + 1}` }),
-        h("div", {}, Object.assign(h("div", { class: "bar" }), { style: `width:${Math.max((inZone[i] / total) * 100, inZone[i] ? 2 : 0)}%;background:${HR_ZONE_COLORS[i]}` })),
-        h("b", { text: `${Math.round(inZone[i] / 60)} min` }), h("span", { text: range(z) })))));
-  }
+  out.push(...zoneSection(data));
   // Kilometres, rides in fives, bar length by pace and color by heart rate zone.
   const group = run ? 1 : 5;
   const splits = [];
@@ -3463,7 +3470,6 @@ function workoutCharts(sport, a, detail) {
 // and for a run or ride how it compares with the ones before.
 const LAST_SKIP = new Set(["Walk", "Hike"]);
 const LAST_EXERCISES = 4;
-const LAST_COMPARE = 8;
 // Goals: where you stand and, at the pace of the last 12 weeks, roughly when you get there.
 // Strength compares estimated 1RM, so more reps at a lighter weight count too. Endurance turns
 // every workout of at least half the distance into a time for the goal distance (Riegel).
@@ -3651,30 +3657,14 @@ function lastWorkoutCard() {
     for (const part of (swim.parts ?? []).filter((p) => p.repeats >= MIN_SET_REPEATS && !p.mixed)) card.append(swimPart(part));
     card.append(h("a", { class: "more", href: `#/vytrvalost/plavanie/${a.id}`, text: "Celý tréning ›" }));
   } else if (sport) {
-    card.append(h("div", { class: "facts" }, a.distance ? fact("Vzdialenosť", num(a.distance / 1000, 1), "km") : null, fact("Čas", hours(duration(a))),
-      a.average_speed ? fact(sport.paceLabel, sport.paceText(sport.pace(a))) : null, a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null, fact("Námaha", effortText(a))));
-    card.append(compareBars(sport, a), h("a", { class: "more", href: `#/vytrvalost/${key}/${a.id}`, text: "Celý tréning ›" }));
+    const detail = activityDetail(a);
+    card.append(workoutFacts(sport, a, detail), routeMap(detail, sport) ?? "", ...zoneSection(detail?.stream),
+      h("a", { class: "more", href: `#/vytrvalost/${key}/${a.id}`, text: "Celý tréning ›" }));
   } else {
     card.append(h("div", { class: "facts" }, fact("Čas", hours(duration(a))), a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null, fact("Námaha", effortText(a))));
   }
   card.append(workout ? aiBlock("workout", workout.id, "Zhodnotiť tréning") : aiBlock("activity", String(a.id), "Zhodnotiť tréning"));
   return card;
-}
-// Speed of this workout beside the ones before it, taller is faster, this one in its sport's color.
-function compareBars(sport, a) {
-  const list = state.activities.filter((x) => sport.types.includes(x.sport_type) && x.average_speed > 0 && x.start_date <= a.start_date)
-    .sort((x, y) => x.start_date.localeCompare(y.start_date)).slice(-LAST_COMPARE);
-  if (list.length < 3) return null;
-  const top = Math.max(...list.map((x) => x.average_speed));
-  const slot = 100 / list.length, width = slot * 0.62;
-  const svg = s("svg", { viewBox: "0 0 100 48", preserveAspectRatio: "none", role: "img", "aria-label": `${sport.paceLabel} oproti predchádzajúcim` },
-    ...list.map((x, i) => {
-      const height = Math.max((x.average_speed / top) * 46, 2);
-      return s("rect", { x: i * slot + (slot - width) / 2, y: 48 - height, width, height, rx: 1.2, fill: x === a ? sport.color : "var(--grid)" });
-    }));
-  const average = mean(list.filter((x) => x !== a).map((x) => sport.pace(x)));
-  return h("div", { class: "compare" }, svg,
-    h("div", { class: "sub" }, h("span", { text: `Posledných ${list.length}, vyššie je rýchlejšie` }), h("span", { text: `priemer ${sport.paceText(average)}` })));
 }
 function swimCard(swim) {
   const card = h("section", { class: "card" }, h("h2", { text: `Série, ${fullDate(swim.day)}` }),
