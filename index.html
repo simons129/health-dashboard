@@ -222,6 +222,9 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 @media (prefers-color-scheme: dark) { .route-map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9); } }
 .map-modes { margin: 12px 0 0; }
 .split.effort { grid-template-columns: 74px minmax(0, 1fr) 66px 70px; }
+.split.interval { grid-template-columns: 22px minmax(0, 1fr) 66px 58px; }
+.split.interval .sub { font-size: 12.5px; }
+.split.interval .sub small { color: var(--ink-2); }
 .split .badge-cell { font-size: 12px; color: var(--ink-2); }
 .same-route .record[aria-current=true] { background: var(--wash); box-shadow: inset 3px 0 0 var(--hrv); }
 .map-modes button { min-height: 32px; font-size: 13px; }
@@ -2852,7 +2855,8 @@ function activityDetail(a) {
       const factors = data && RUN_TYPES.has(a.sport_type) ? gradeFactors(data.points) : null;
       const line = decodePolyline(full?.data.map?.summary_polyline ?? "");
       state.details.set(id, { stream: data, route: line, drift: data ? heartDrift(data.points) : null,
-        factors, flatPace: factors ? flatPace(data.points, factors) : null, mates: sameRoute(a, line, routes) });
+        factors, flatPace: factors ? flatPace(data.points, factors) : null, mates: sameRoute(a, line, routes),
+        intervals: data && RUN_TYPES.has(a.sport_type) ? detectIntervals(data.points, factors) : null });
       if (route().id === id) render();
     })
     .catch(() => state.details.delete(id));
@@ -2908,6 +2912,77 @@ const RECORD_EFFORTS = { beh: [1000, 5000, 10000, 21097], bicykel: [20000, 40000
 function effortRanking(sport, length) {
   return [...state.efforts].filter(([, e]) => sport.types.includes(e.type) && e.best[length] != null)
     .map(([id, e]) => ({ id, seconds: e.best[length], start: e.start })).sort((x, y) => x.seconds - y.seconds);
+}
+// Intervals in a run: the stretches split into fast and slow at a threshold found from this run's
+// own pace (two groups, k-means), on the flat so hills do not split them. Stretches under 30 s are
+// noise and join their neighbours. GPS and terrain alone make an even run differ by up to about 30 %,
+// so it is an interval session when the groups differ by more, each fast stretch is that much quicker
+// than the rests beside it, and there are three or more fast stretches of a similar length.
+const INTERVAL_MIN_SECONDS = 30, INTERVAL_MIN_REPS = 3, INTERVAL_GAP = 1.3, INTERVAL_SIMILAR = [0.6, 1.6];
+function detectIntervals(points, factors) {
+  const { time, distance, speed, hr } = points;
+  if (!time?.length || !speed?.length || !distance?.length) return null;
+  const flat = speed.map((v, i) => (v > STOP_SPEED ? v * (factors?.[i] ?? 1) : 0));
+  const values = flat.map((_, i) => mean(flat.slice(Math.max(0, i - 1), i + 2)));
+  const sorted = [...values].sort((a, b) => a - b);
+  let lo = sorted[Math.floor(sorted.length * 0.2)], hi = sorted[Math.floor(sorted.length * 0.8)];
+  for (let k = 0; k < 12; k++) {
+    const cut = (lo + hi) / 2;
+    lo = mean(values.filter((v) => v <= cut)) ?? lo;
+    hi = mean(values.filter((v) => v > cut)) ?? hi;
+  }
+  if (!(hi > lo * INTERVAL_GAP) || hi <= STOP_SPEED) return null;
+  const cut = (lo + hi) / 2;
+  let parts = [];
+  values.forEach((v, i) => {
+    const fast = v > cut, last = parts.at(-1);
+    if (last?.fast === fast) last.to = i; else parts.push({ fast, from: i, to: i });
+  });
+  const seconds = (part) => time[part.to] - time[part.from] + (time[part.to + 1] != null ? time[part.to + 1] - time[part.to] : 0);
+  // Short stretches join the one before them, then neighbours of one kind merge.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (let i = 1; i < parts.length; i++) {
+      if (seconds(parts[i]) < INTERVAL_MIN_SECONDS) { parts[i - 1].to = parts[i].to; parts.splice(i, 1); changed = true; break; }
+    }
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i].fast === parts[i - 1].fast) { parts[i - 1].to = parts[i].to; parts.splice(i, 1); changed = true; break; }
+    }
+  }
+  const reps = parts.map((part, n) => ({ ...part, n })).filter((part) => part.fast).map((part) => {
+    const next = parts[part.n + 1], after = parts[part.n + 2], before = parts[part.n - 1];
+    const beats = hr?.slice(part.from, part.to + 1).filter((v) => v > 0) ?? [];
+    const speedOf = (q) => (q ? (distance[q.to] - distance[q.from]) / Math.max(seconds(q), 1) : null);
+    const around = [speedOf(before), speedOf(next)].filter((v) => v != null);
+    return {
+      fromKm: distance[part.from] / 1000, toKm: distance[part.to] / 1000, metres: distance[part.to] - distance[part.from],
+      seconds: seconds(part), hr: beats.length ? mean(beats) : null, maxHr: beats.length ? Math.max(...beats) : null,
+      rest: next && after ? seconds(next) : null,
+      contrast: around.length ? speedOf(part) / Math.max(...around, 0.1) : 0,
+    };
+  }).filter((r) => r.metres > 0 && r.contrast >= INTERVAL_GAP);
+  const middle = median(reps.map((r) => r.seconds));
+  const similar = reps.filter((r) => r.seconds >= middle * INTERVAL_SIMILAR[0] && r.seconds <= middle * INTERVAL_SIMILAR[1]);
+  return similar.length >= INTERVAL_MIN_REPS ? similar : null;
+}
+// "6 × 800 m" when the distances match, "6 × 3 min" when the times do.
+function intervalTitle(reps) {
+  const metres = median(reps.map((r) => r.metres)), secs = median(reps.map((r) => r.seconds));
+  const sameDistance = reps.every((r) => Math.abs(r.metres - metres) <= metres * 0.1);
+  const unit = metres >= 300 ? 100 : 50;
+  const what = sameDistance ? (metres >= 1000 ? `${num(Math.round(metres / unit) * unit / 1000, 1)} km` : `${Math.round(metres / unit) * unit} m`)
+    : secs >= 90 ? `${num(Math.round(secs / 30) / 2, 1)} min` : `${Math.round(secs / 5) * 5} s`;
+  const rests = reps.map((r) => r.rest).filter((v) => v != null);
+  return `${reps.length} × ${what}${rests.length ? `, oddych ${clockShort(median(rests))}` : ""}`;
+}
+function intervalsCard(reps) {
+  if (!reps) return null;
+  return h("div", {}, h("div", { class: "detail-label" }, h("span", { text: `Intervaly: ${intervalTitle(reps)}` }), h("span", { text: "tempo · tep" })),
+    h("div", { class: "splits" }, ...reps.map((r, i) => h("div", { class: "split interval" },
+      h("span", { text: String(i + 1) }),
+      h("div", { class: "sub" }, `${num(r.metres)} m za ${clockShort(r.seconds)}`, r.rest ? h("small", { text: ` · oddych ${clockShort(r.rest)}` }) : null),
+      h("b", { text: `${clockShort((r.seconds / r.metres) * 1000)} /km` }),
+      h("span", { text: r.hr ? `${Math.round(r.hr)} bpm` : "–" })))));
 }
 const effortPace = (sport, length, seconds) => (sport.lowerIsFaster ? `${clockShort((seconds / length) * 1000)} /km` : `${num((length / seconds) * 3.6, 1)} km/h`);
 function bestEffortsCard(sport, a, detail) {
@@ -3159,10 +3234,11 @@ function workoutCharts(sport, a, detail) {
     const km = i == null ? null : x[i];
     for (const row of splitRows) row.classList.toggle("active", km != null && hasDistance && km > row.from && km <= row.to);
   };
+  const regions = hasDistance && detail.intervals ? detail.intervals.map((r) => ({ from: r.fromKm, to: r.toKm })) : [];
   const chart = (title, height, options) => {
     const el = h("div", { class: "chart" });
     charts.push(el);
-    el.draw = () => lineChart(el, { height, x, xMin: 0, xMax, xTicks, onPoint: (i) => pointAt(el, i), ...options });
+    el.draw = () => lineChart(el, { height, x, xMin: 0, xMax, xTicks, onPoint: (i) => pointAt(el, i), regions, ...options });
     out.push(h("div", { class: "detail-label", text: title }), el);
   };
   out.push(...hint);
@@ -3192,6 +3268,7 @@ function workoutCharts(sport, a, detail) {
       read: (i) => ({ title: at(i), rows: [{ value: `${num(p.altitude[i])} m n. m.` }] }),
     });
   }
+  if (detail.intervals) out.push(intervalsCard(detail.intervals));
   // Time in each of Strava's five zones, from every second of heart rate.
   const seconds = Object.entries(data.hr_seconds ?? {});
   if (seconds.length && zones) {
