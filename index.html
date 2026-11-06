@@ -234,6 +234,7 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .split.active { background: var(--wash); box-shadow: inset 3px 0 0 var(--hrv); }
 .split span:last-child, .split b { text-align: right; }
 .split b { font-weight: 620; }
+.split b small { display: block; font-size: 11px; font-weight: 450; color: var(--ink-2); }
 .goal-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .goal-head .title { font-weight: 640; font-size: 14.5px; }
 .goal-head .link { min-height: 26px; font-size: 18px; line-height: 1; color: var(--muted); }
@@ -1171,7 +1172,7 @@ function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, zone
     } else {
       for (const part of segments(sr.values)) {
         svg.append(s("polyline", { points: part.map((i) => `${px(x[i])},${y(sr.values[i])}`).join(" "), fill: "none",
-          stroke: sr.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+          stroke: sr.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round", opacity: sr.opacity ?? 1 }));
       }
     }
   }
@@ -2824,6 +2825,7 @@ function activityCard(sport, a) {
       fact(sport.paceLabel, sport.paceText(sport.pace(a))),
       a.average_heartrate ? fact("Tep", num(a.average_heartrate), "bpm") : null,
       a.total_elevation_gain ? fact("Stúpanie", num(a.total_elevation_gain), "m") : null,
+      detail?.flatPace ? fact("Tempo na rovine", `${clockShort(detail.flatPace)} /km`) : null,
       detail?.drift != null ? fact("Tepový drift", `${num(detail.drift, 1)} %`) : null),
     routeMap(detail, sport),
     ...workoutCharts(sport, a, detail),
@@ -2831,6 +2833,7 @@ function activityCard(sport, a) {
     h("a", { class: "more", href: `#/kalendar/${day}`, text: "Otvoriť deň v kalendári ›" }));
 }
 // The opened run or ride loads its streams and route once, the card draws what has arrived.
+const RUN_TYPES = new Set(["Run", "TrailRun", "VirtualRun"]);
 function activityDetail(a) {
   const id = String(a.id);
   const cached = state.details.get(id);
@@ -2839,7 +2842,9 @@ function activityDetail(a) {
   Promise.all([api(`/api/strava_streams/${id}`), api(`/api/strava_activities/${id}`)])
     .then(([stream, full]) => {
       const data = stream?.data ?? null;
-      state.details.set(id, { stream: data, route: decodePolyline(full?.data.map?.summary_polyline ?? ""), drift: data ? heartDrift(data.points) : null });
+      const factors = data && RUN_TYPES.has(a.sport_type) ? gradeFactors(data.points) : null;
+      state.details.set(id, { stream: data, route: decodePolyline(full?.data.map?.summary_polyline ?? ""), drift: data ? heartDrift(data.points) : null,
+        factors, flatPace: factors ? flatPace(data.points, factors) : null });
       if (route().id === id) render();
     })
     .catch(() => state.details.delete(id));
@@ -2862,6 +2867,33 @@ function decodePolyline(text) {
 }
 // Heart rate drift: speed per heartbeat in the second half against the first. Under 5 % the
 // aerobic base carries the pace, more means the heart worked harder for the same speed.
+// Pace adjusted for the slope, like Strava's Grade Adjusted Pace: Minetti's energy cost of running
+// on a grade, against the cost on the flat. The grade comes from altitude over about 200 m, a single
+// GPS altitude step is too noisy, and stays within ±30 %.
+const GRADE_WINDOW = 5, GRADE_MIN_METRES = 40, GRADE_LIMIT = 0.3;
+const runCost = (g) => 155.4 * g ** 5 - 30.4 * g ** 4 - 43.3 * g ** 3 + 46.3 * g ** 2 + 19.5 * g + 3.6;
+function gradeFactors(points) {
+  const { distance: d, altitude: a } = points;
+  if (!d?.length || !a?.length || a.length !== d.length) return null;
+  return d.map((_, i) => {
+    const from = Math.max(0, i - GRADE_WINDOW), to = Math.min(d.length - 1, i + GRADE_WINDOW);
+    const run = d[to] - d[from];
+    if (run < GRADE_MIN_METRES) return 1;
+    const grade = Math.max(-GRADE_LIMIT, Math.min(GRADE_LIMIT, (a[to] - a[from]) / run));
+    return runCost(grade) / runCost(0);
+  });
+}
+// Pace on the flat over a stretch of points: time over the distance it would have been on the flat.
+function flatPace(points, factors, fromM = -Infinity, toM = Infinity) {
+  const { time, distance: d, speed } = points;
+  let seconds = 0, flat = 0;
+  for (let i = 1; i < d.length; i++) {
+    if (d[i] <= fromM || d[i] > toM || !(speed?.[i] > STOP_SPEED)) continue;
+    seconds += time[i] - time[i - 1];
+    flat += (d[i] - d[i - 1]) * factors[i];
+  }
+  return flat > 0 ? (seconds / flat) * 1000 : null;
+}
 const DRIFT_MIN_SECONDS = 40 * 60;
 const STOP_SPEED = 1.4;
 const PACE_SMOOTH = 3;
@@ -2911,7 +2943,7 @@ function resolveColor(css) {
   return color;
 }
 // A colour for each point of the route, or null for one colour.
-function routeColors(stream, mode) {
+function routeColors(stream, mode, factors) {
   const p = stream?.points;
   if (!p?.latlng?.length || mode === "plain") return null;
   if (mode === "zones") {
@@ -2920,7 +2952,8 @@ function routeColors(stream, mode) {
     const colors = HR_ZONE_COLORS.map(resolveColor);
     return p.hr.map((v) => (v > 0 ? colors[zoneIndexOf(v, zones)] : STOP_COLOR));
   }
-  const speed = p.speed ?? [];
+  // On a run the colour follows the pace on the flat, a hill is not a slow stretch.
+  const speed = (p.speed ?? []).map((v, i) => (factors ? v * factors[i] : v));
   const smooth = speed.map((v, i) => { const near = speed.slice(Math.max(0, i - PACE_SMOOTH), i + PACE_SMOOTH + 1).filter((x) => x > STOP_SPEED); return v > STOP_SPEED && near.length ? mean(near) : null; });
   const middle = median(smooth.filter((v) => v != null));
   if (!middle) return null;
@@ -2937,7 +2970,7 @@ function routeMap(detail, sport) {
   if (!route?.length) return null;
   const hasStream = points?.length > 1 && points.length === detail.stream.points.latlng.length;
   const mode = hasStream ? state.mapMode ?? "pace" : "plain";
-  const colors = hasStream ? routeColors(detail.stream, mode) : null;
+  const colors = hasStream ? routeColors(detail.stream, mode, detail.factors) : null;
   const el = h("div", { class: "route-map", role: "img", "aria-label": "Mapa trasy" });
   el.draw = () => loadLeaflet().then((L) => {
     // The map measures its box, that is right only once the page has laid it out.
@@ -2966,7 +2999,7 @@ function routeMap(detail, sport) {
   const modes = h("div", { class: "seg map-modes", role: "group", "aria-label": "Farba trasy" }, ...MAP_MODES.map(([id, label]) =>
     h("button", { type: "button", "aria-pressed": String(mode === id), text: label, onclick: () => { state.mapMode = id; render(); } })));
   const run = sport?.lowerIsFaster;
-  const key = mode === "pace" && colors ? h("div", { class: "map-key" }, h("span", { text: run ? "rýchlejšie" : "rýchlejšie" }),
+  const key = mode === "pace" && colors ? h("div", { class: "map-key" }, h("span", { text: "rýchlejšie" }),
       Object.assign(h("span", { class: "ramp" }), { style: `background:linear-gradient(90deg, ${PACE_COLORS.join(", ")})` }), h("span", { text: "pomalšie" }),
       Object.assign(h("i"), { style: `width:10px;height:10px;border-radius:50%;background:${STOP_COLOR}` }), h("span", { text: "stojíš" }))
     : mode === "zones" && colors ? legend(HR_ZONE_COLORS.map((color, i) => ({ color, label: `Z${i + 1}` })))
@@ -2998,6 +3031,8 @@ function workoutCharts(sport, a, detail) {
   // GPS pace jumps from sample to sample, the line follows a short rolling mean.
   const smooth = moving.map((v, i) => { if (v == null) return null; const near = moving.slice(Math.max(0, i - PACE_SMOOTH), i + PACE_SMOOTH + 1).filter((x) => x != null); return mean(near); });
   const paceValues = smooth.map((v) => (v == null || !paceDomain ? v : Math.min(Math.max(v, paceDomain[0]), paceDomain[1])));
+  const factors = run ? detail.factors : null;
+  const flatValues = factors ? smooth.map((v, i) => (v == null ? null : Math.min(Math.max(v / factors[i], paceDomain[0]), paceDomain[1]))) : null;
   const out = [];
   const positions = p.latlng?.length === x.length ? p.latlng : null;
   // One moment shows everywhere: the dot on the map, the line on every chart and its kilometre.
@@ -3017,10 +3052,14 @@ function workoutCharts(sport, a, detail) {
   };
   out.push(...hint);
   if (paceValues.some((v) => v != null)) {
+    if (flatValues) out.push(legend([{ kind: "line", color: sport.color, opacity: 0.45, label: "tempo" }, { kind: "line", color: sport.color, label: "na rovine (zohľadnené prevýšenie)" }]));
     chart(run ? "Tempo, vyššie je rýchlejšie" : "Rýchlosť", 150, {
-      series: [{ color: sport.color, values: paceValues }], invert: run, domain: paceDomain, tickText: run ? clockShort : (v) => num(v),
+      series: flatValues ? [{ color: sport.color, values: paceValues, opacity: 0.45 }, { color: sport.color, values: flatValues }] : [{ color: sport.color, values: paceValues }],
+      invert: run, domain: paceDomain, tickText: run ? clockShort : (v) => num(v),
       label: run ? "Tempo v priebehu" : "Rýchlosť v priebehu",
-      read: (i) => ({ title: at(i), rows: [{ color: sport.color, value: moving[i] == null ? "stojíš" : run ? `${clockShort(moving[i])} /km` : `${num(moving[i], 1)} km/h` }] }),
+      read: (i) => ({ title: at(i), rows: [
+        { color: sport.color, value: moving[i] == null ? "stojíš" : run ? `${clockShort(moving[i])} /km` : `${num(moving[i], 1)} km/h`, label: flatValues ? "tempo" : "" },
+        flatValues && moving[i] != null ? { color: sport.color, value: `${clockShort(smooth[i] / factors[i])} /km`, label: "na rovine" } : null].filter(Boolean) }),
     });
   }
   const zones = hrZones();
@@ -3064,14 +3103,15 @@ function workoutCharts(sport, a, detail) {
     const paceOf = (sp) => (run ? sp.seconds / (sp.km - sp.from) : ((sp.km - sp.from) / sp.seconds) * 3600);
     const values = splits.map(paceOf);
     const best = run ? Math.min(...values) : Math.max(...values), worst = run ? Math.max(...values) : Math.min(...values);
-    out.push(h("div", { class: "detail-label" }, h("span", { text: run ? "Kilometre" : "Po 5 km" }), h("span", { text: run ? "tempo · tep" : "rýchlosť · tep" })),
+    out.push(h("div", { class: "detail-label" }, h("span", { text: run ? "Kilometre" : "Po 5 km" }), h("span", { text: run ? (factors ? "tempo / na rovine · tep" : "tempo · tep") : "rýchlosť · tep" })),
       h("div", { class: "splits" }, ...splits.map((sp, i) => {
         const hr = sp.hrTime ? Math.round(sp.hrSum / sp.hrTime) : null;
         const zoneColor = hr == null || !zones ? "var(--grid)" : HR_ZONE_COLORS[zoneIndexOf(hr, zones)];
         const share = best === worst ? 1 : 0.35 + 0.65 * (run ? (worst - values[i]) / (worst - best) : (values[i] - worst) / (best - worst));
         const row = h("div", { class: "split" }, h("span", { text: num(sp.km, sp.km % 1 ? 1 : 0) }),
           h("div", {}, Object.assign(h("div", { class: "bar" }), { style: `width:${share * 100}%;background:${zoneColor}` })),
-          h("b", { text: run ? clockShort(values[i]) : num(values[i], 1) }), h("span", { text: hr ? `${hr} bpm` : "–" }));
+          h("b", {}, run ? clockShort(values[i]) : num(values[i], 1), factors && run ? h("small", { text: clockShort(flatPace(p, factors, sp.from * 1000, sp.km * 1000) ?? values[i]) }) : null),
+          h("span", { text: hr ? `${hr} bpm` : "–" }));
         row.from = sp.from; row.to = sp.km;
         splitRows.push(row);
         return row;
