@@ -569,7 +569,25 @@ const COST = { skipped: 30, forbidden: 100, double: 5, doubleLower: 20, noFreeDa
 const MIN_DAYS_TO_PLAN = 2;
 const WEEKDAY_NAMES = ["Po", "Ut", "St", "Št", "Pi", "So", "Ne"];
 // Share of maximum heart rate.
-const ZONES = { easy: [0.65, 0.78], tempo: [0.84, 0.9], hard: [0.9, 0.95] };
+// Heart rate zones as set in Strava. Until the server has them, Strava's default shares of the
+// maximum heart rate stand in. Easy is zones 1–2, moderate zone 3, hard zones 4–5.
+const STRAVA_ZONE_SHARES = [0, 0.65, 0.81, 0.89, 0.97];
+const HR_ZONE_COLORS = ["color-mix(in srgb, var(--strength) 45%, transparent)", "var(--strength)", "var(--other)", "var(--run)", "var(--critical)"];
+const PLAN_ZONES = { easy: 1, tempo: 2, hard: 3 };
+function hrZones() {
+  if (state.hrZones?.length === 5) return state.hrZones;
+  const hrMax = trainingBase().hrMax;
+  if (!hrMax) return null;
+  const starts = STRAVA_ZONE_SHARES.map((share) => Math.round(hrMax * share));
+  return starts.map((start, i) => [start, i < 4 ? starts[i + 1] - 1 : null]);
+}
+// Where moderate and hard start.
+function zoneLimits() {
+  const zones = hrZones();
+  return zones ? [zones[2][0], zones[3][0]] : null;
+}
+const zoneIndexOf = (bpm, zones) => { let i = 0; while (i < 4 && bpm >= zones[i + 1][0]) i++; return i; };
+const groupOfZone = (i) => (i <= 1 ? 0 : i === 2 ? 1 : 2);
 const PLAN_SPORTS = {
   beh: { label: "Beh", mark: "🏃", color: "run", types: ["Run", "TrailRun", "VirtualRun"], options: [["easy", "Ľahký"], ["long", "Dlhý"], ["tempo", "Tempo"], ["intervals", "Intervaly"]] },
   bicykel: { label: "Bicykel", mark: "🚴", color: "ride", types: ["Ride", "VirtualRide", "EBikeRide", "GravelRide", "MountainBikeRide"], options: [["easy", "Ľahká"], ["long", "Dlhá"], ["tempo", "Tempo"], ["intervals", "Intervaly"]] },
@@ -677,7 +695,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true, goals: [], goalForm: null, details: new Map() };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true, goals: [], goalForm: null, details: new Map(), hrZones: null };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -737,7 +755,7 @@ async function write(method, path, body) {
 // The last loaded data is kept on the phone, so the app opens at once with what it showed before and
 // then brings it up to date. Logging out deletes it.
 const SNAPSHOT_KEYS = ["trend", "dayDoc", "dayExtra", "readiness", "recovery", "readinessSpan", "strength", "workouts", "activities", "summary", "appleLast",
-  "ai", "plans", "goals", "swims", "totals", "rest", "weight", "vo2", "fat", "lean"];
+  "ai", "plans", "goals", "hrZones", "swims", "totals", "rest", "weight", "vo2", "fat", "lean"];
 let dataDb = null;
 function openDataDb() {
   dataDb ??= new Promise((resolve) => {
@@ -801,7 +819,7 @@ async function loadDay() {
 const lastPerDay = (rows) => [...new Map(rows.map((r) => [r.day, r])).values()];
 async function loadBody() {
   const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
-  const [totals, rest, weight, vo2, fat, lean, swims, plans, goals, summary, aiDocs, heart] = await Promise.all([
+  const [totals, rest, weight, vo2, fat, lean, swims, plans, goals, zones, summary, aiDocs, heart] = await Promise.all([
     items("/api/apple_daily_totals?sort=date&order=desc&limit=1000"),
     items("/api/apple_resting_heart_rate?sort=day&order=asc&limit=1000"),
     items("/api/apple_weight?sort=day&order=asc&limit=1000"),
@@ -811,6 +829,7 @@ async function loadBody() {
     api("/api/strava_swims?sort=start_date&order=desc&limit=1000").then((r) => r.items),
     api("/api/plans?sort=day&order=asc&limit=1000").then((r) => r.items),
     api("/api/goals?sort=created_at&order=asc&limit=100").then((r) => r.items),
+    api("/api/settings/hr_zones"),
     api(`/api/daily_summary/${localDay(new Date())}`),
     api("/api/ai_requests?sort=created_at&order=desc&limit=100").then((r) => r.items),
     api("/api/apple_heart_rate?sort=updated_at&order=desc&limit=1").then((r) => r.items),
@@ -820,6 +839,7 @@ async function loadBody() {
   state.summary = summary ? { text: summary.data.text, at: summary.updated_at } : null;
   state.plans = plans.map((doc) => ({ id: doc.id, ...doc.data }));
   state.goals = goals.map((doc) => ({ id: doc.id, ...doc.data }));
+  state.hrZones = zones?.data.zones ?? null;
   state.swims = new Map(swims.map((doc) => [doc.id, swimSummary(doc.data)]));
   state.totals = new Map(totals.map((t) => [t.date, t]));
   state.rest = lastPerDay(rest);
@@ -2092,7 +2112,8 @@ function trainingBase(key) {
 const fiveMinutes = (minutes, low, high) => Math.round(Math.max(low, Math.min(high, minutes ?? low)) / 5) * 5;
 function workoutSuggestion(key, type) {
   const { hrMax, pace, typicalMinutes, longestMinutes, lastHr } = trainingBase(key);
-  const zone = (name) => (hrMax ? `${Math.round(hrMax * ZONES[name][0])}–${Math.round(hrMax * ZONES[name][1])} bpm` : "podľa pocitu");
+  const zones = hrZones();
+  const zone = (name) => { const z = zones?.[PLAN_ZONES[name]]; return z ? `${z[0]}–${z[1]} bpm (zóna ${PLAN_ZONES[name] + 1})` : "podľa pocitu"; };
   const option = PLAN_SPORTS[key].options.find(([id]) => id === type) ?? PLAN_SPORTS[key].options[0];
   const label = option[1];
   const run = (offset) => (pace ? `${clockShort(pace + offset)} /km` : "podľa pocitu");
@@ -2100,7 +2121,7 @@ function workoutSuggestion(key, type) {
   if (key === "beh") {
     if (option[0] === "easy") {
       const minutes = fiveMinutes(typicalMinutes * 0.75, 30, 60);
-      return { title: `${label} beh ${minutes} min`, steps: [`Tep ${zone("easy")}, tempo okolo ${run(40)}`, lastHr && hrMax && lastHr > hrMax * ZONES.easy[1] ? `Tvoje behy majú priemer ${Math.round(lastHr)} bpm, tu pokojne spomaľ a kľudne aj choď` : "Musíš vedieť rozprávať v celých vetách"] };
+      return { title: `${label} beh ${minutes} min`, steps: [`Tep ${zone("easy")}, tempo okolo ${run(40)}`, lastHr && zones && lastHr > zones[1][1] ? `Tvoje behy majú priemer ${Math.round(lastHr)} bpm, tu pokojne spomaľ a kľudne aj choď` : "Musíš vedieť rozprávať v celých vetách"] };
     }
     if (option[0] === "long") {
       const minutes = fiveMinutes(Math.min(longestMinutes * 1.1, longestMinutes + 15), 60, 150);
@@ -2376,15 +2397,14 @@ function swimDetails(swim) {
 const AI_SPLITS = 60;
 function streamDetails(detail) {
   const { splits = [], hr_seconds: seconds = {} } = detail.stream;
-  const hrMax = trainingBase().hrMax;
-  const limits = [hrMax * ZONES.easy[1], hrMax * ZONES.hard[0]];
-  const minutes = [0, 0, 0];
-  for (const [bpm, secs] of Object.entries(seconds)) minutes[Number(bpm) < limits[0] ? 0 : Number(bpm) < limits[1] ? 1 : 2] += secs / 60;
+  const zones = hrZones();
+  const minutes = [0, 0, 0, 0, 0];
+  if (zones) for (const [bpm, secs] of Object.entries(seconds)) minutes[zoneIndexOf(Number(bpm), zones)] += secs / 60;
   return { workout: {
     note: "Kilometre a pásma zo sekundových dát Stravy. Drift: o koľko klesla rýchlosť na úder srdca v druhej polovici, pod 5 % je dobrá aeróbna báza.",
     heartRateDriftPercent: detail.drift == null ? null : Math.round(detail.drift * 10) / 10,
-    minutesInZones: Object.fromEntries(INTENSITY_ZONES.map((z, i) => [z.label, Math.round(minutes[i])])),
-    zoneLimitsBpm: hrMax ? limits.map(Math.round) : null,
+    minutesInStravaZones: Object.fromEntries(minutes.map((m, i) => [`Z${i + 1}`, Math.round(m)])),
+    stravaZonesBpm: zones,
     splits: splits.slice(0, AI_SPLITS).map((sp) => ({ km: sp.km, time: clockShort(sp.seconds), hr: sp.hr, climb: sp.climb })),
   } };
 }
@@ -2702,7 +2722,7 @@ async function loadIntensity() {
   }
   samples.sort((a, b) => a[0] - b[0]);
   const hrMax = trainingBase().hrMax;
-  const limits = [hrMax * ZONES.easy[1], hrMax * ZONES.hard[0]];
+  const limits = zoneLimits() ?? [hrMax * STRAVA_ZONE_SHARES[2], hrMax * STRAVA_ZONE_SHARES[3]];
   const rows = [];
   for (const sport of INTENSITY_SPORTS) {
     for (const a of state.activities.filter((x) => PLAN_SPORTS[sport].types.includes(x.sport_type) && x.start_date_local.slice(0, 10) >= from)) {
@@ -2754,7 +2774,7 @@ function intensityView(nav) {
   const list = rows.filter((r) => r.day >= from);
   const filter = h("div", { class: "seg metric", role: "group", "aria-label": "Obdobie" },
     ...INTENSITY_WEEKS.map(([weeks, label]) => h("button", { "aria-pressed": String(state.intensityWeeks === weeks), text: label, onclick: () => { state.intensityWeeks = weeks; render(); } })));
-  const info = legend(INTENSITY_ZONES.map((z, i) => ({ color: z.color, label: `${z.label} ${[`pod ${Math.round(limits[0])}`, `do ${Math.round(limits[1])}`, `nad ${Math.round(limits[1])}`][i]}` })));
+  const info = legend(INTENSITY_ZONES.map((z, i) => ({ color: z.color, label: `${z.label} ${[`do ${Math.round(limits[0]) - 1}`, `${Math.round(limits[0])}–${Math.round(limits[1]) - 1}`, `od ${Math.round(limits[1])}`][i]}` })));
 
   const today = localDay(new Date());
   const firstWeek = mondayOf(from);
@@ -2910,14 +2930,13 @@ function workoutCharts(sport, a, detail) {
       read: (i) => ({ title: at(i), rows: [{ color: sport.color, value: moving[i] == null ? "stojíš" : run ? `${clockShort(moving[i])} /km` : `${num(moving[i], 1)} km/h` }] }),
     });
   }
-  const hrMax = trainingBase().hrMax;
-  const limits = [hrMax * ZONES.easy[1], hrMax * ZONES.hard[0]];
+  const zones = hrZones();
   if (p.hr?.some((v) => v > 0)) {
     chart("Tep", 150, {
       series: [{ color: "var(--hr)", values: p.hr.map((v) => v || null) }],
-      zones: hrMax ? [{ from: 0, to: limits[0], color: INTENSITY_ZONES[0].color }, { from: limits[0], to: limits[1], color: INTENSITY_ZONES[1].color }, { from: limits[1], to: 300, color: INTENSITY_ZONES[2].color }] : [],
+      zones: zones ? zones.map(([from, to], i) => ({ from, to: to == null ? 300 : to + 1, color: HR_ZONE_COLORS[i] })) : [],
       label: "Tep v priebehu",
-      read: (i) => ({ title: at(i), rows: [{ color: "var(--hr)", value: p.hr[i] ? `${p.hr[i]} bpm` : "–" }] }),
+      read: (i) => ({ title: at(i), rows: [{ color: "var(--hr)", value: p.hr[i] ? `${p.hr[i]} bpm` : "–", label: p.hr[i] && zones ? `zóna ${zoneIndexOf(p.hr[i], zones) + 1}` : "" }] }),
     });
   }
   if (p.altitude?.length && Math.max(...p.altitude) - Math.min(...p.altitude) >= 10) {
@@ -2926,16 +2945,19 @@ function workoutCharts(sport, a, detail) {
       read: (i) => ({ title: at(i), rows: [{ value: `${num(p.altitude[i])} m n. m.` }] }),
     });
   }
-  // Time in each zone, from every second of heart rate.
+  // Time in each of Strava's five zones, from every second of heart rate.
   const seconds = Object.entries(data.hr_seconds ?? {});
-  if (seconds.length && hrMax) {
-    const inZone = [0, 0, 0];
-    for (const [bpm, secs] of seconds) inZone[Number(bpm) < limits[0] ? 0 : Number(bpm) < limits[1] ? 1 : 2] += secs;
+  if (seconds.length && zones) {
+    const inZone = [0, 0, 0, 0, 0];
+    for (const [bpm, secs] of seconds) inZone[zoneIndexOf(Number(bpm), zones)] += secs;
     const total = inZone.reduce((sum, v) => sum + v, 0) || 1;
-    out.push(h("div", { class: "detail-label", text: "Čas v pásmach" }),
-      h("div", { class: "zone-bar", role: "img", "aria-label": INTENSITY_ZONES.map((z, i) => `${z.label} ${Math.round(inZone[i] / 60)} min`).join(", ") },
-        ...INTENSITY_ZONES.map((z, i) => inZone[i] ? Object.assign(h("i"), { style: `flex:${inZone[i]};background:${z.color}` }) : null)),
-      legend(INTENSITY_ZONES.map((z, i) => ({ color: z.color, label: `${z.label} ${Math.round(inZone[i] / 60)} min (${Math.round((inZone[i] / total) * 100)} %)` }))));
+    const range = ([from, to]) => (to == null ? `od ${from}` : from ? `${from}–${to}` : `do ${to}`);
+    out.push(h("div", { class: "detail-label" }, h("span", { text: "Čas v zónach" }), h("span", { text: state.hrZones ? "zóny zo Stravy" : "odhad zón" })),
+      h("div", { class: "zone-bar", role: "img", "aria-label": inZone.map((v, i) => `zóna ${i + 1} ${Math.round(v / 60)} min`).join(", ") },
+        ...inZone.map((v, i) => v ? Object.assign(h("i"), { style: `flex:${v};background:${HR_ZONE_COLORS[i]}` }) : null)),
+      h("div", { class: "splits" }, ...zones.map((z, i) => h("div", { class: "split" }, h("span", { text: `Z${i + 1}` }),
+        h("div", {}, Object.assign(h("div", { class: "bar" }), { style: `width:${Math.max((inZone[i] / total) * 100, inZone[i] ? 2 : 0)}%;background:${HR_ZONE_COLORS[i]}` })),
+        h("b", { text: `${Math.round(inZone[i] / 60)} min` }), h("span", { text: range(z) })))));
   }
   // Kilometres, rides in fives, bar length by pace and color by heart rate zone.
   const group = run ? 1 : 5;
@@ -2952,7 +2974,7 @@ function workoutCharts(sport, a, detail) {
     out.push(h("div", { class: "detail-label" }, h("span", { text: run ? "Kilometre" : "Po 5 km" }), h("span", { text: run ? "tempo · tep" : "rýchlosť · tep" })),
       h("div", { class: "splits" }, ...splits.map((sp, i) => {
         const hr = sp.hrTime ? Math.round(sp.hrSum / sp.hrTime) : null;
-        const zoneColor = hr == null || !hrMax ? "var(--grid)" : INTENSITY_ZONES[hr < limits[0] ? 0 : hr < limits[1] ? 1 : 2].color;
+        const zoneColor = hr == null || !zones ? "var(--grid)" : HR_ZONE_COLORS[zoneIndexOf(hr, zones)];
         const share = best === worst ? 1 : 0.35 + 0.65 * (run ? (worst - values[i]) / (worst - best) : (values[i] - worst) / (best - worst));
         return h("div", { class: "split" }, h("span", { text: num(sp.km, sp.km % 1 ? 1 : 0) }),
           h("div", {}, Object.assign(h("div", { class: "bar" }), { style: `width:${share * 100}%;background:${zoneColor}` })),
