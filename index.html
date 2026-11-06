@@ -226,6 +226,8 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .splits { display: grid; gap: 4px; margin-top: 6px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .split { display: grid; grid-template-columns: 34px minmax(0, 1fr) 58px 52px; gap: 8px; align-items: center; }
 .split .bar { height: 10px; border-radius: 5px; }
+.split { border-radius: 6px; transition: background .1s; }
+.split.active { background: var(--wash); box-shadow: inset 3px 0 0 var(--hrv); }
 .split span:last-child, .split b { text-align: right; }
 .split b { font-weight: 620; }
 .goal-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
@@ -1174,13 +1176,19 @@ function lineChart(el, { height = 230, x, xMin, xMax, xTicks, series, band, zone
   const marker = s("circle", { r: 4.5, fill: series[series.length - 1].color, stroke: "var(--surface)", "stroke-width": 2, visibility: "hidden" });
   svg.append(cross, marker);
   let current = 0;
-  const show = (i, event) => {
-    current = i;
+  const mark = (i) => {
     const cx = px(x[i]);
     const v = series[series.length - 1].values[i];
     cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.setAttribute("visibility", "visible");
     marker.setAttribute("cx", cx);
     if (v != null) { marker.setAttribute("cy", y(v)); marker.setAttribute("visibility", "visible"); } else marker.setAttribute("visibility", "hidden");
+    return cx;
+  };
+  // Another chart of the same workout can point here too, without a tooltip.
+  el.mark = (i) => { if (i == null || x[i] == null) { cross.setAttribute("visibility", "hidden"); marker.setAttribute("visibility", "hidden"); } else mark(i); };
+  const show = (i, event) => {
+    current = i;
+    const cx = mark(i);
     const { title, rows } = read(i);
     onPoint?.(i);
     const box = svg.getBoundingClientRect();
@@ -2911,7 +2919,7 @@ function workoutCharts(sport, a, detail) {
   if (!detail) return [h("p", { class: "note keep", text: "Načítavam priebeh tréningu…" })];
   const data = detail.stream;
   if (!data) return [h("p", { class: "note keep", text: "Priebeh tréningu zo Stravy sa ešte len sťahuje, objaví sa po najbližšej synchronizácii." })];
-  const hint = data.points.latlng?.length ? [h("p", { class: "note keep", text: "Ťahaj prstom po grafe, bod na mape ukáže, kde si vtedy bol." })] : [];
+  const hint = data.points.latlng?.length ? [h("p", { class: "note keep", text: "Ťahaj prstom po grafe, tá istá chvíľa sa ukáže na ostatných grafoch, na mape aj v kilometroch." })] : [];
   const p = data.points;
   const hasDistance = p.distance?.length && p.distance.at(-1) > 0;
   const x = hasDistance ? p.distance.map((m) => m / 1000) : p.time.map((t) => t / 60);
@@ -2932,10 +2940,19 @@ function workoutCharts(sport, a, detail) {
   const paceValues = smooth.map((v) => (v == null || !paceDomain ? v : Math.min(Math.max(v, paceDomain[0]), paceDomain[1])));
   const out = [];
   const positions = p.latlng?.length === x.length ? p.latlng : null;
-  const onPoint = positions ? (i) => moveRouteCursor(i == null ? null : positions[i]) : undefined;
+  // One moment shows everywhere: the dot on the map, the line on every chart and its kilometre.
+  const charts = [];
+  let splitRows = [];
+  const pointAt = (from, i) => {
+    if (positions) moveRouteCursor(i == null ? null : positions[i]);
+    for (const other of charts) if (other !== from) other.mark?.(i);
+    const km = i == null ? null : x[i];
+    for (const row of splitRows) row.classList.toggle("active", km != null && hasDistance && km > row.from && km <= row.to);
+  };
   const chart = (title, height, options) => {
     const el = h("div", { class: "chart" });
-    el.draw = () => lineChart(el, { height, x, xMin: 0, xMax, xTicks, onPoint, ...options });
+    charts.push(el);
+    el.draw = () => lineChart(el, { height, x, xMin: 0, xMax, xTicks, onPoint: (i) => pointAt(el, i), ...options });
     out.push(h("div", { class: "detail-label", text: title }), el);
   };
   out.push(...hint);
@@ -2992,9 +3009,12 @@ function workoutCharts(sport, a, detail) {
         const hr = sp.hrTime ? Math.round(sp.hrSum / sp.hrTime) : null;
         const zoneColor = hr == null || !zones ? "var(--grid)" : HR_ZONE_COLORS[zoneIndexOf(hr, zones)];
         const share = best === worst ? 1 : 0.35 + 0.65 * (run ? (worst - values[i]) / (worst - best) : (values[i] - worst) / (best - worst));
-        return h("div", { class: "split" }, h("span", { text: num(sp.km, sp.km % 1 ? 1 : 0) }),
+        const row = h("div", { class: "split" }, h("span", { text: num(sp.km, sp.km % 1 ? 1 : 0) }),
           h("div", {}, Object.assign(h("div", { class: "bar" }), { style: `width:${share * 100}%;background:${zoneColor}` })),
           h("b", { text: run ? clockShort(values[i]) : num(values[i], 1) }), h("span", { text: hr ? `${hr} bpm` : "–" }));
+        row.from = sp.from; row.to = sp.km;
+        splitRows.push(row);
+        return row;
       })));
   }
   return out;
