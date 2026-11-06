@@ -523,6 +523,31 @@ nav.tabs::-webkit-scrollbar { display: none; }
 .card > .legend { margin-bottom: 8px; }
 .gear { display: flex; color: var(--muted); padding: 4px; }
 .gear svg { width: 22px; height: 22px; }
+.journal .rating > span small { display: block; font-size: 11px; color: var(--ink-2); line-height: 1.2; }
+.journal .amount-time { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.journal .rating { display: grid; grid-template-columns: 104px 1fr; align-items: center; gap: 8px; margin: 6px 0; font-size: 13.5px; }
+.journal .dots { display: flex; gap: 6px; align-items: center; }
+.journal .dots button { width: 30px; height: 30px; min-height: 0; padding: 0; border-radius: 50%; border: 1.5px solid var(--border); background: none; font-size: 12px; color: var(--ink-2); }
+.journal .dots button[aria-pressed=true] { background: var(--hrv); border-color: var(--hrv); color: #fff; font-weight: 650; }
+.journal .dots small { color: var(--ink-2); font-size: 11.5px; margin-left: 4px; }
+.journal .stepper { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; }
+.journal .stepper button { width: 30px; height: 30px; min-height: 0; padding: 0; border-radius: 8px; }
+.journal .stepper b { min-width: 42px; text-align: center; font-variant-numeric: tabular-nums; }
+.journal .habits { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.journal .habits button { min-height: 34px; border-radius: 17px; font-size: 13.5px; }
+.journal .habits button[aria-pressed=true] { background: var(--hrv); border-color: var(--hrv); color: #fff; }
+.journal .amount { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 8px; font-size: 13.5px; }
+.journal .amount input { width: 110px; min-height: 34px; }
+.journal textarea { width: 100%; min-height: 54px; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; resize: vertical; }
+.journal .group-head { margin-top: 10px; }
+.journal-line { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; }
+.journal-line .link { font-size: 13px; }
+.effect { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) 46px; gap: 8px; align-items: center; padding: 8px 0; border-top: 1px solid var(--grid); font-size: 13.5px; }
+.effect .axis { position: relative; height: 10px; background: var(--wash); border-radius: 5px; }
+.effect .axis i { position: absolute; top: 0; bottom: 0; border-radius: 5px; }
+.effect .axis u { position: absolute; top: -3px; bottom: -3px; left: 50%; width: 1px; background: var(--axis); }
+.effect b { text-align: right; font-variant-numeric: tabular-nums; }
+.effect .sub { grid-column: 1 / -1; color: var(--ink-2); font-size: 12px; margin-top: -2px; }
 .setting { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--grid); }
 .setting .main { flex: 1; min-width: 0; }
 .setting .title { font-weight: 620; font-size: 14px; }
@@ -728,7 +753,7 @@ const COMPOUND_REPS = 10, ISOLATION_REPS = 12, CORE_REPS = 20;
 const HARD_RIDE_SCORE = 50;
 const RANGES = [[7, "7 dní"], [30, "30 dní"], [90, "90 dní"], [365, "1 rok"]];
 
-const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true, goals: [], goalForm: null, details: new Map(), hrZones: null, mapMode: "pace", efforts: new Map() };
+const state = { range: 30, day: localDay(new Date()), trend: null, dayDoc: null, dayExtra: null, readiness: [], recovery: [], strength: [], workouts: [], activities: [], intensity: null, intensityWeeks: 8, summary: null, appleLast: null, syncing: false, loadedAt: Date.now(), ai: [], aiError: null, aiDrafts: {}, aiOpen: null, openChats: new Set(), plannerOpen: false, plans: [], weekView: 0, proposal: null, pick: { sport: "beh", type: null }, pickDay: null, planError: "", sportRange: 365, sportMetric: "efficiency", swims: new Map(), weeks: CALENDAR_WEEKS, totals: new Map(), rest: [], weight: [], vo2: [], fat: null, lean: null, metric: "weight", search: "", bodyOpen: null, sheetDay: null, bodyDay: true, goals: [], goalForm: null, details: new Map(), hrZones: null, mapMode: "pace", efforts: new Map(), journal: new Map(), journalSettings: { custom: [], hidden: [] }, journalDrafts: {}, journalOpen: false, journalDay: null, meals: [] };
 
 function storedKey() {
   try { return localStorage.getItem(KEY_NAME) || ""; } catch { return ""; }
@@ -788,7 +813,7 @@ async function write(method, path, body) {
 // The last loaded data is kept on the phone, so the app opens at once with what it showed before and
 // then brings it up to date. Logging out deletes it.
 const SNAPSHOT_KEYS = ["trend", "dayDoc", "dayExtra", "readiness", "recovery", "readinessSpan", "strength", "workouts", "activities", "summary", "appleLast",
-  "ai", "plans", "goals", "hrZones", "efforts", "stravaLast", "swims", "totals", "rest", "weight", "vo2", "fat", "lean"];
+  "ai", "plans", "goals", "hrZones", "efforts", "stravaLast", "journal", "journalSettings", "meals", "swims", "totals", "rest", "weight", "vo2", "fat", "lean"];
 let dataDb = null;
 function openDataDb() {
   dataDb ??= new Promise((resolve) => {
@@ -852,7 +877,7 @@ async function loadDay() {
 const lastPerDay = (rows) => [...new Map(rows.map((r) => [r.day, r])).values()];
 async function loadBody() {
   const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
-  const [totals, rest, weight, vo2, fat, lean, swims, plans, goals, zones, stravaStatus, streams, summary, aiDocs, heart] = await Promise.all([
+  const [totals, rest, weight, vo2, fat, lean, swims, plans, goals, zones, journal, journalSettings, meals, stravaStatus, streams, summary, aiDocs, heart] = await Promise.all([
     items("/api/apple_daily_totals?sort=date&order=desc&limit=1000"),
     items("/api/apple_resting_heart_rate?sort=day&order=asc&limit=1000"),
     items("/api/apple_weight?sort=day&order=asc&limit=1000"),
@@ -863,6 +888,9 @@ async function loadBody() {
     api("/api/plans?sort=day&order=asc&limit=1000").then((r) => r.items),
     api("/api/goals?sort=created_at&order=asc&limit=100").then((r) => r.items),
     api("/api/settings/hr_zones"),
+    api(`/api/journal?gte.day=${addDays(localDay(new Date()), -JOURNAL_HISTORY_DAYS)}&sort=day&order=desc&limit=1000`).then((r) => r.items).catch(() => []),
+    api("/api/settings/journal").catch(() => null),
+    api(`/api/apple_nutrition?gte.day=${addDays(localDay(new Date()), -JOURNAL_HISTORY_DAYS)}&limit=1000`).then((r) => r.items.map((d) => d.data)).catch(() => []),
     api("/strava/status").catch(() => null),
     api("/api/strava_streams?limit=1000&omit=points,hr_seconds,splits").then((r) => r.items),
     api(`/api/daily_summary/${localDay(new Date())}`),
@@ -875,6 +903,9 @@ async function loadBody() {
   state.plans = plans.map((doc) => ({ id: doc.id, ...doc.data }));
   state.goals = goals.map((doc) => ({ id: doc.id, ...doc.data }));
   state.hrZones = zones?.data.zones ?? null;
+  state.journal = new Map(journal.map((doc) => [doc.id, doc.data]));
+  state.journalSettings = journalSettings?.data ?? { custom: [], hidden: [] };
+  state.meals = meals;
   state.stravaLast = stravaStatus?.lastSync ?? state.stravaLast ?? null;
   state.efforts = new Map(streams.filter((doc) => doc.data.best).map((doc) => [doc.id, { type: doc.data.sport_type, start: doc.data.start_date, best: doc.data.best }]));
   state.swims = new Map(swims.map((doc) => [doc.id, swimSummary(doc.data)]));
@@ -2345,6 +2376,197 @@ function contextRow(day, types, id) {
   const items = trainingContext(day, types, id);
   return h("div", { class: "day-context" }, h("span", { class: "label", text: "Pred tréningom" }),
     ...items.map((item) => h("span", { class: "item" }, Object.assign(h("i"), { style: `background:var(--${item.tone})` }), item.text)));
+}
+// The journal: one entry a day, filled in ahead with the usual answers so an ordinary day is a single
+// tap. The morning entry covers last night's sleep and last evening's habits, so a habit of entry D
+// is set beside the recovery, HRV and resting heart rate of day D.
+const JOURNAL_HISTORY_DAYS = 365;
+const JOURNAL_USUAL_DAYS = 14;
+const JOURNAL_RATINGS = [
+  ["sleep", "Spánok", ["zlý", "výborný"], 3],
+  ["energy", "Energia", ["nízka", "vysoká"], 3],
+  ["soreness", "Svalovica", ["žiadna", "silná"], 2],
+  ["stress", "Stres", ["žiadny", "vysoký"], 2],
+];
+const JOURNAL_HABITS = [
+  { id: "alcohol", label: "Alkohol", icon: "🍺", amount: true },
+  { id: "late_sleep", label: "Neskoro spať", icon: "🌙" },
+  { id: "sick", label: "Chorý", icon: "🤒" },
+  { id: "travel", label: "Cestovanie", icon: "✈️" },
+  { id: "pain", label: "Bolesť / zranenie", icon: "🩹" },
+];
+const DEFAULT_DRINKS = 2, DEFAULT_DRINK_TIME = "20:00", DEFAULT_SLEEP_HOURS = 7.5;
+function journalHabits() {
+  const { custom = [], hidden = [] } = state.journalSettings ?? {};
+  return [...JOURNAL_HABITS, ...custom].filter((habit) => !hidden.includes(habit.id));
+}
+// What an ordinary day looks like: the median of the last two weeks, no habits.
+function journalUsual() {
+  const recent = [...state.journal.values()].sort((a, b) => b.day.localeCompare(a.day)).slice(0, JOURNAL_USUAL_DAYS);
+  const middle = (key, fallback) => { const values = recent.map((e) => e[key]).filter((v) => typeof v === "number"); return values.length ? median(values) : fallback; };
+  return {
+    ...Object.fromEntries(JOURNAL_RATINGS.map(([key, , , fallback]) => [key, Math.round(middle(key, fallback))])),
+    sleepHours: Math.round(middle("sleepHours", DEFAULT_SLEEP_HOURS) * 2) / 2, soreParts: [], habits: {}, note: "",
+  };
+}
+function journalDraft(day) {
+  state.journalDrafts[day] ??= structuredClone(state.journal.get(day) ?? { day, ...journalUsual() });
+  return state.journalDrafts[day];
+}
+async function saveJournal(day, quick) {
+  const draft = journalDraft(day);
+  const entry = { ...draft, day, quick: Boolean(quick && !draft.dirty), saved_at: new Date().toISOString() };
+  delete entry.dirty;
+  try {
+    await write("PUT", `/api/journal/${day}`, entry);
+    state.journal.set(day, entry);
+    delete state.journalDrafts[day];
+    state.journalOpen = false;
+    state.journalError = "";
+    saveSnapshot();
+  } catch {
+    state.journalError = "Záznam sa nepodarilo uložiť. Skús to znova.";
+  }
+  render();
+}
+function journalForm(day) {
+  const draft = journalDraft(day);
+  const saved = state.journal.get(day);
+  const change = (apply) => { apply(draft); draft.dirty = true; render(); };
+  const box = h("div", { class: "journal" });
+  for (const [key, label, ends] of JOURNAL_RATINGS) {
+    const row = h("div", { class: "rating" }, h("span", {}, label, h("small", { text: `1 ${ends[0]} · 5 ${ends[1]}` })));
+    const dots = h("div", { class: "dots", role: "group", "aria-label": label },
+      ...[1, 2, 3, 4, 5].map((v) => h("button", { type: "button", "aria-pressed": String(draft[key] === v), "aria-label": `${label} ${v}`, text: String(v), onclick: () => change((d) => { d[key] = v; }) })));
+    row.append(dots);
+    box.append(row);
+    if (key === "sleep") {
+      box.append(h("div", { class: "rating" }, h("span", { text: "Hodiny" }), h("div", { class: "stepper" },
+        h("button", { type: "button", text: "–", "aria-label": "Menej", onclick: () => change((d) => { d.sleepHours = Math.max(0, d.sleepHours - 0.5); }) }),
+        h("b", { text: `${num(draft.sleepHours, 1)} h` }),
+        h("button", { type: "button", text: "+", "aria-label": "Viac", onclick: () => change((d) => { d.sleepHours = Math.min(14, d.sleepHours + 0.5); }) }))));
+    }
+    if (key === "soreness" && draft.soreness >= 3) {
+      box.append(h("div", { class: "habits" }, ...[["upper", "💪 Horná"], ["lower", "🦵 Spodná"]].map(([part, text]) =>
+        h("button", { type: "button", "aria-pressed": String(draft.soreParts?.includes(part)), text, onclick: () => change((d) => { d.soreParts = d.soreParts?.includes(part) ? d.soreParts.filter((x) => x !== part) : [...(d.soreParts ?? []), part]; }) }))));
+    }
+  }
+  box.append(h("div", { class: "group-head", text: "Včera večer" }));
+  box.append(h("div", { class: "habits" }, ...journalHabits().map((habit) => h("button", { type: "button", "aria-pressed": String(!!draft.habits?.[habit.id]), text: `${habit.icon} ${habit.label}`,
+    onclick: () => change((d) => { d.habits ??= {}; if (d.habits[habit.id]) delete d.habits[habit.id]; else d.habits[habit.id] = habit.amount ? { drinks: DEFAULT_DRINKS, time: DEFAULT_DRINK_TIME } : true; }) }))));
+  const alcohol = draft.habits?.alcohol;
+  if (alcohol) {
+    box.append(h("div", { class: "amount" }, "🍺 Počet nápojov",
+      h("div", { class: "stepper" },
+        h("button", { type: "button", text: "–", "aria-label": "Menej nápojov", onclick: () => change((d) => { d.habits.alcohol.drinks = Math.max(1, d.habits.alcohol.drinks - 1); }) }),
+        h("b", { text: String(alcohol.drinks) }),
+        h("button", { type: "button", text: "+", "aria-label": "Viac nápojov", onclick: () => change((d) => { d.habits.alcohol.drinks += 1; }) })),
+      h("label", { class: "amount-time" }, "od ", h("input", { type: "time", value: alcohol.time, "aria-label": "Čas prvého nápoja", onchange: (e) => { draft.habits.alcohol.time = e.target.value || DEFAULT_DRINK_TIME; draft.dirty = true; } }))));
+  }
+  box.append(h("textarea", { placeholder: "Poznámka (nepovinná)", "aria-label": "Poznámka", oninput: (e) => { draft.note = e.target.value; draft.dirty = true; } }, draft.note ?? ""));
+  if (state.journalError) box.append(h("p", { class: "write-error", text: state.journalError }));
+  box.append(h("div", { class: "week-actions" },
+    h("button", { type: "button", class: "primary", text: saved && !draft.dirty ? "Uložené" : draft.dirty || saved ? "Uložiť" : "OK, bežný deň", onclick: () => saveJournal(day, true) }),
+    saved || state.journalOpen ? h("button", { type: "button", class: "link", text: "Zavrieť", onclick: () => { delete state.journalDrafts[day]; state.journalOpen = false; render(); } }) : null));
+  return box;
+}
+// A saved entry in one line.
+function journalSummary(entry) {
+  const parts = [`😴 ${num(entry.sleepHours, 1)} h`, `spánok ${entry.sleep}`, `energia ${entry.energy}`];
+  if (entry.soreness >= 3) parts.push(`svalovica ${entry.soreness}`);
+  if (entry.stress >= 3) parts.push(`stres ${entry.stress}`);
+  for (const habit of [...JOURNAL_HABITS, ...(state.journalSettings?.custom ?? [])]) {
+    const value = entry.habits?.[habit.id];
+    if (value) parts.push(habit.amount ? `${habit.icon} ${value.drinks}× od ${value.time}` : habit.icon);
+  }
+  return parts.join(" · ");
+}
+function journalCard() {
+  const today = localDay(new Date());
+  const saved = state.journal.get(today);
+  const card = h("section", { class: "card" });
+  if (saved && !state.journalOpen) {
+    card.append(h("div", { class: "journal-line" }, h("span", { text: `📓 ${journalSummary(saved)}` }),
+      h("button", { type: "button", class: "link", text: "Upraviť", onclick: () => { state.journalOpen = true; render(); } })));
+    if (saved.note) card.append(h("p", { class: "note keep", text: saved.note }));
+    return card;
+  }
+  card.append(h("h2", { text: "Ako sa máš?" }), h("p", { class: "note keep", text: "Predvyplnené tvojím bežným dňom. Zmeň len to, čo bolo inak." }), journalForm(today));
+  return card;
+}
+// Habits the data shows without asking: a meal after 21:00 or a workout from 19:30 the evening before.
+const LATE_MEAL = "21:00", LATE_WORKOUT = "19:30";
+function autoHabits(day) {
+  const evening = addDays(day, -1);
+  const lastMeal = state.meals.filter((m) => m.day === evening).map((m) => localTime(m.start_time ?? m.time)).filter(Boolean).sort().at(-1);
+  const lateWorkout = state.activities.some((a) => a.start_date_local.slice(0, 10) === evening && a.start_date_local.slice(11, 16) >= LATE_WORKOUT);
+  return { late_meal: lastMeal ? lastMeal >= LATE_MEAL : null, late_workout: lateWorkout };
+}
+const localTime = (iso) => { const t = Date.parse(iso); return Number.isNaN(t) ? null : new Date(t).toTimeString().slice(0, 5); };
+// For each habit, the days with it against the days without: recovery, HRV and resting heart rate of
+// that day. Only shown with at least five days of each, fewer would read noise as an effect.
+const EFFECT_MIN_DAYS = 5;
+function journalEffects() {
+  const recovery = new Map(state.recovery.map((d) => [d.day, d.score]));
+  const hrv = new Map((state.trend?.hrv ?? []).map((d) => [d.day, d.avg]));
+  const rest = new Map(state.rest.map((d) => [d.day, d.bpm]));
+  const entries = [...state.journal.values()];
+  const tests = [
+    ...journalHabits().map((habit) => ({ label: `${habit.icon} ${habit.label}`, has: (e) => !!e.habits?.[habit.id] })),
+    { label: "😴 Spánok pod 7 h", has: (e) => e.sleepHours < 7 },
+    { label: "😴 Spánok hodnotený 4–5", has: (e) => e.sleep >= 4 },
+    { label: "🍽 Jedlo po 21:00 (z Kalorických tabuliek)", has: (e) => autoHabits(e.day).late_meal, auto: true },
+    { label: "🏃 Tréning po 19:30 (zo Stravy)", has: (e) => autoHabits(e.day).late_workout, auto: true },
+  ];
+  return tests.map((test) => {
+    const yes = [], no = [];
+    for (const e of entries) { const v = test.has(e); if (v === true) yes.push(e.day); else if (v === false) no.push(e.day); }
+    const avg = (days, map) => mean(days.map((d) => map.get(d)).filter((v) => v != null));
+    const enough = yes.length >= EFFECT_MIN_DAYS && no.length >= EFFECT_MIN_DAYS;
+    const rec = enough ? [avg(yes, recovery), avg(no, recovery)] : null;
+    const h1 = enough ? [avg(yes, hrv), avg(no, hrv)] : null;
+    const r1 = enough ? [avg(yes, rest), avg(no, rest)] : null;
+    return { ...test, yes: yes.length, no: no.length, enough,
+      recovery: rec?.every((v) => v != null) ? rec[0] - rec[1] : null,
+      hrv: h1?.every((v) => v != null) ? ((h1[0] - h1[1]) / h1[1]) * 100 : null,
+      rest: r1?.every((v) => v != null) ? r1[0] - r1[1] : null };
+  });
+}
+function effectsCard() {
+  const effects = journalEffects();
+  const card = h("section", { class: "card" }, h("h2", { text: "Vplyv návykov" }),
+    h("p", { class: "note", text: `Dni s návykom oproti dňom bez neho: recovery, HRV a pokojový tep v deň záznamu. Ukazuje sa od ${EFFECT_MIN_DAYS} dní každého druhu, je to súvislosť, nie dôkaz príčiny.` }));
+  const shown = effects.filter((e) => e.enough && e.recovery != null).sort((a, b) => Math.abs(b.recovery) - Math.abs(a.recovery));
+  const scale = Math.max(15, ...shown.map((e) => Math.abs(e.recovery)));
+  const signed = (v, digits = 0, unit = "") => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${num(Math.abs(v), digits)}${unit}`;
+  for (const e of shown) {
+    const width = (Math.abs(e.recovery) / scale) * 50;
+    card.append(h("div", { class: "effect" }, h("span", { text: e.label }),
+      h("div", { class: "axis", role: "img", "aria-label": `recovery ${signed(e.recovery)}` }, h("u"),
+        Object.assign(h("i"), { style: `${e.recovery >= 0 ? `left:50%` : `right:50%`};width:${width}%;background:var(--${e.recovery >= 0 ? "good" : "warning"})` })),
+      h("b", { text: signed(e.recovery) }),
+      h("span", { class: "sub", text: [e.hrv != null ? `HRV ${signed(e.hrv, 0, " %")}` : null, e.rest != null ? `pokojový tep ${signed(e.rest, 1, " bpm")}` : null, `${e.yes} dní s, ${e.no} bez`].filter(Boolean).join(" · ") })));
+  }
+  const waiting = effects.filter((e) => !e.enough);
+  if (!shown.length) card.append(h("p", { class: "empty", text: "Zatiaľ málo záznamov. Vplyv sa ukáže, keď bude aspoň 5 dní s návykom a 5 bez neho." }));
+  if (waiting.length) card.append(h("p", { class: "hint keep", text: `Čaká na viac dní: ${waiting.map((e) => `${e.label} (${e.yes}×)`).join(", ")}` }));
+  return card;
+}
+// The journal tab: an entry for any day, the effects, and the last entries.
+function journalView() {
+  const today = localDay(new Date());
+  const day = state.journalDay ?? today;
+  const nav = h("div", { class: "daynav" },
+    h("button", { type: "button", "aria-label": "Predchádzajúci deň", text: "‹", onclick: () => { state.journalDay = addDays(day, -1); render(); } }),
+    h("label", { class: "date" }, h("b", { text: day === today ? `dnes, ${shortDate(day)}` : fullDate(day) }), h("span", { text: state.journal.has(day) ? "Uložené" : "Bez záznamu" }),
+      h("input", { type: "date", value: day, max: today, "aria-label": "Deň", onchange: (e) => { if (e.target.value) { state.journalDay = e.target.value; render(); } } })),
+    Object.assign(h("button", { type: "button", "aria-label": "Nasledujúci deň", text: "›", onclick: () => { state.journalDay = addDays(day, 1); render(); } }), { disabled: day >= today }));
+  const entryCard = h("section", { class: "card" }, h("h2", { text: "Záznam" }), journalForm(day));
+  const recent = [...state.journal.values()].sort((a, b) => b.day.localeCompare(a.day)).slice(0, 14);
+  const list = h("section", { class: "card" }, h("h2", { text: "Posledné záznamy" }),
+    ...(recent.length ? recent.map((e) => h("a", { class: "record", href: "#/dennik", onclick: (event) => { event.preventDefault(); state.journalDay = e.day; scrollTo(0, 0); render(); } },
+      h("div", { class: "main" }, h("div", { class: "title", text: fullDate(e.day) }), h("div", { class: "sub", text: journalSummary(e) }), e.note ? h("div", { class: "sub", text: e.note }) : null))) : [h("div", { class: "empty", text: "Zatiaľ žiadne záznamy." })]));
+  return [nav, entryCard, effectsCard(), list];
 }
 function plansOn(day) {
   return state.plans.filter((plan) => plan.day === day);
@@ -4386,7 +4608,7 @@ function route() {
   const [, page = "prehlad", kind = "", id = ""] = location.hash.slice(1).split("/");
   return { page: page || "prehlad", kind, id: decodeURIComponent(id) };
 }
-const OVERVIEW_PAGES = ["prehlad", "telo", "aktivita", "ciele"];
+const OVERVIEW_PAGES = ["prehlad", "telo", "aktivita", "ciele", "dennik"];
 function tabs(page) {
   const active = OVERVIEW_PAGES.includes(page) ? "prehlad" : page;
   const tab = (id, href, label) => {
@@ -4399,6 +4621,34 @@ function tabs(page) {
 const GEAR_PATH = "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z";
 // Raise it with a change people would notice, the deploy time below says which build it is.
 const APP_VERSION = "1.4";
+async function saveJournalSettings(next) {
+  try {
+    await write("PUT", "/api/settings/journal", next);
+    state.journalSettings = next;
+    saveSnapshot();
+  } catch {
+    state.journalError = "Nastavenie sa nepodarilo uložiť.";
+  }
+  render();
+}
+function journalSettingsCard() {
+  const settings = state.journalSettings ?? { custom: [], hidden: [] };
+  const all = [...JOURNAL_HABITS, ...(settings.custom ?? [])];
+  const input = h("input", { type: "text", placeholder: "Nový návyk, napríklad 🚬 Cigarety", "aria-label": "Nový návyk", maxlength: "40" });
+  const add = () => {
+    const text = input.value.trim();
+    if (!text) return;
+    const [first, ...rest] = [...text];
+    const emoji = /\p{Extended_Pictographic}/u.test(first) ? first : "•";
+    const label = (emoji === "•" ? text : rest.join("")).trim();
+    saveJournalSettings({ ...settings, custom: [...(settings.custom ?? []), { id: `custom_${Date.now()}`, label, icon: emoji }] });
+  };
+  return h("section", { class: "card" }, h("h2", { text: "Denník" }),
+    h("p", { class: "note keep", text: "Ktoré návyky sa majú pýtať. Skryté ostanú v starších záznamoch." }),
+    h("div", { class: "journal" }, h("div", { class: "habits" }, ...all.map((habit) => h("button", { type: "button", "aria-pressed": String(!(settings.hidden ?? []).includes(habit.id)), text: `${habit.icon} ${habit.label}`,
+      onclick: () => { const hidden = settings.hidden ?? []; saveJournalSettings({ ...settings, hidden: hidden.includes(habit.id) ? hidden.filter((x) => x !== habit.id) : [...hidden, habit.id] }); } })))),
+    h("div", { class: "week-actions" }, input, h("button", { type: "button", text: "Pridať", onclick: add })));
+}
 function settingsView() {
   const row = (title, status, button) => h("div", { class: "setting" }, h("div", { class: "main" }, h("div", { class: "title", text: title }), h("div", { class: "sub", text: status })), button);
   const strava = h("button", { type: "button", text: state.stravaSyncing ? "Sťahujem…" : "Synchronizovať", onclick: () => syncStrava() });
@@ -4413,6 +4663,7 @@ function settingsView() {
       row("Strava", state.stravaLast ? `Synchronizované ${whenLabel(state.stravaLast)}. Inak každú hodinu.` : "Zatiaľ bez synchronizácie.", strava),
       row("Apple Zdravie", state.appleLast ? `Dáta do ${whenLabel(state.appleLast)}. Spustí skratku Zdravie sync.` : "Zatiaľ bez dát.", apple),
       row("Aplikácia", `Dáta načítané ${state.loadedAt ? whenLabel(new Date(state.loadedAt).toISOString()) : "z uloženej kópie"}.`, reload)),
+    journalSettingsCard(),
     h("section", { class: "card" }, h("h2", { text: "O aplikácii" }),
       h("div", { class: "facts" }, fact("Verzia", APP_VERSION), Number.isNaN(deployed.getTime()) ? null : fact("Nasadená", `${fullDate(localDay(deployed))} ${deployed.toTimeString().slice(0, 5)}`)),
       h("div", { class: "week-actions" }, h("button", { text: "Odhlásiť sa", onclick: logout }))),
@@ -4420,7 +4671,7 @@ function settingsView() {
 }
 function overviewNav(page) {
   const link = (id, href, label) => h("a", { href, "aria-current": String(page === id), text: label });
-  return h("div", { class: "seg subnav", role: "group", "aria-label": "Prehľad" }, link("prehlad", "#/", "Dnes"), link("telo", "#/telo", "Telo"), link("aktivita", "#/aktivita", "Aktivita"), link("ciele", "#/ciele", "Ciele"));
+  return h("div", { class: "seg subnav", role: "group", "aria-label": "Prehľad" }, link("prehlad", "#/", "Dnes"), link("telo", "#/telo", "Telo"), link("aktivita", "#/aktivita", "Aktivita"), link("dennik", "#/dennik", "Denník"), link("ciele", "#/ciele", "Ciele"));
 }
 // Body measures as tiles with a small trend, the full chart opens right under its tile on a tap.
 // For one day the tiles show that day, with the 30 days before it as the trend. Scores, HRV and
@@ -4518,7 +4769,8 @@ function overviewView(page) {
     return [overviewNav(page), filters(), tiles(3, 6), fitnessCard(), h("div", { class: "grid2" }, loadCard("effort"), loadCard()), h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)"))];
   }
   if (page === "ciele") return [overviewNav(page), goalsCard()];
-  return [overviewNav(page), heroCard(), alertsCard(), weekCard(), lastWorkoutCard()].filter(Boolean);
+  if (page === "dennik") return [overviewNav(page), ...journalView()];
+  return [overviewNav(page), heroCard(), journalCard(), alertsCard(), weekCard(), lastWorkoutCard()].filter(Boolean);
 }
 let renderedPage = null;
 function render() {
