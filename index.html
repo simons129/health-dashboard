@@ -520,6 +520,12 @@ details.table-fold[open] { margin-top: 8px; }
 .card > .legend { margin-bottom: 8px; }
 .gear { display: flex; color: var(--muted); padding: 4px; }
 .gear svg { width: 22px; height: 22px; }
+.setting { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--grid); }
+.setting .main { flex: 1; min-width: 0; }
+.setting .title { font-weight: 620; font-size: 14px; }
+.setting .sub { color: var(--ink-2); font-size: 12.5px; }
+.setting button, .setting .button-link { flex: none; }
+.button-link { display: inline-flex; align-items: center; min-height: 36px; padding: 0 11px; border: 1px solid var(--border); border-radius: 7px; color: var(--ink); text-decoration: none; background: var(--surface); }
 .muscle-group { margin: 0; border-top: 1px solid var(--grid); }
 .muscle-group summary { padding: 11px 0; color: var(--ink); font-size: 14.5px; font-weight: 600; }
 nav.tabs svg { display: none; }
@@ -2692,15 +2698,9 @@ function summaryBlock() {
     line.append(h("button", { class: "hero-create", text: "Vytvoriť sumár dňa", onclick: refresh }));
   }
   box.append(line);
-  if (state.appleLast) {
-    const sync = h("a", { class: `refresh${state.syncing ? " spinning" : ""}`, href: SYNC_SHORTCUT, "aria-label": "Synchronizovať Apple Zdravie", onclick: watchSync });
-    sync.append(refreshIcon());
-    box.append(h("div", { class: "hero-meta" }, h("span", { text: appleStatus() }), sync));
-  }
-  const strava = h("button", { class: `refresh${state.stravaSyncing ? " spinning" : ""}`, type: "button", "aria-label": "Synchronizovať Stravu", onclick: () => syncStrava() });
-  strava.disabled = !!state.stravaSyncing;
-  strava.append(refreshIcon());
-  box.append(h("div", { class: "hero-meta" }, h("span", { text: state.stravaSyncing ? "Strava: sťahujem nové tréningy…" : `Strava: ${state.stravaLast ? `synchronizované ${whenLabel(state.stravaLast)}` : "zatiaľ bez synchronizácie"}` }), strava));
+  // Only the times here, syncing lives in the settings.
+  if (state.appleLast) box.append(h("div", { class: "hero-meta" }, h("span", { text: appleStatus() })));
+  box.append(h("div", { class: "hero-meta" }, h("span", { text: state.stravaSyncing ? "Strava: sťahujem nové tréningy…" : `Strava: ${state.stravaLast ? `synchronizované ${whenLabel(state.stravaLast)}` : "zatiaľ bez synchronizácie"}` })));
   const error = aiErrorNote(key);
   if (error) box.append(error);
   return box;
@@ -4403,10 +4403,28 @@ function tabs(page) {
   };
   return h("nav", { class: "tabs" }, tab("prehlad", "#/", "Prehľad"), tab("sila", "#/sila", "Sila"), tab("vytrvalost", "#/vytrvalost", "Vytrvalosť"), tab("kalendar", "#/kalendar", "Kalendár"), tab("trener", "#/trener", "Tréner"));
 }
+// The gear of Lucide icons (ISC licence).
+const GEAR_PATH = "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z";
+// Raise it with a change people would notice, the deploy time below says which build it is.
+const APP_VERSION = "1.4";
 function settingsView() {
-  return [h("section", { class: "card" }, h("h2", { text: "Nastavenia" }),
-    h("div", { class: "facts" }, fact("Apple Zdravie, dáta do", state.appleLast ? whenLabel(state.appleLast) : "–")),
-    h("div", { class: "week-actions" }, h("button", { text: "Odhlásiť sa", onclick: logout })))];
+  const row = (title, status, button) => h("div", { class: "setting" }, h("div", { class: "main" }, h("div", { class: "title", text: title }), h("div", { class: "sub", text: status })), button);
+  const strava = h("button", { type: "button", text: state.stravaSyncing ? "Sťahujem…" : "Synchronizovať", onclick: () => syncStrava() });
+  strava.disabled = !!state.stravaSyncing;
+  const apple = h("a", { class: "button-link", href: SYNC_SHORTCUT, text: state.syncing ? "Čakám na dáta…" : "Synchronizovať", onclick: watchSync });
+  const reload = h("button", { type: "button", text: syncing ? "Načítavam…" : "Načítať znova", onclick: () => { state.loadedAt = 0; syncData().then(render); render(); } });
+  reload.disabled = !!syncing;
+  // GitHub Pages sends the time of the deploy as the page's last change.
+  const deployed = new Date(document.lastModified);
+  return [
+    h("section", { class: "card" }, h("h2", { text: "Dáta" }),
+      row("Strava", state.stravaLast ? `Synchronizované ${whenLabel(state.stravaLast)}. Inak každú hodinu.` : "Zatiaľ bez synchronizácie.", strava),
+      row("Apple Zdravie", state.appleLast ? `Dáta do ${whenLabel(state.appleLast)}. Spustí skratku Zdravie sync.` : "Zatiaľ bez dát.", apple),
+      row("Aplikácia", `Dáta načítané ${state.loadedAt ? whenLabel(new Date(state.loadedAt).toISOString()) : "z uloženej kópie"}.`, reload)),
+    h("section", { class: "card" }, h("h2", { text: "O aplikácii" }),
+      h("div", { class: "facts" }, fact("Verzia", APP_VERSION), Number.isNaN(deployed.getTime()) ? null : fact("Nasadená", `${fullDate(localDay(deployed))} ${deployed.toTimeString().slice(0, 5)}`)),
+      h("div", { class: "week-actions" }, h("button", { text: "Odhlásiť sa", onclick: logout }))),
+  ];
 }
 function overviewNav(page) {
   const link = (id, href, label) => h("a", { href, "aria-current": String(page === id), text: label });
@@ -4514,7 +4532,7 @@ function render() {
   const { page } = route();
   app.classList.toggle("enter", page !== renderedPage);
   renderedPage = page;
-  const settings = h("a", { class: "gear", href: "#/nastavenia", "aria-label": "Nastavenia" }, s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("circle", { cx: 12, cy: 12, r: 3 }), s("path", { d: "M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3" })));
+  const settings = h("a", { class: "gear", href: "#/nastavenia", "aria-label": "Nastavenia" }, s("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" }, s("path", { d: GEAR_PATH }), s("circle", { cx: 12, cy: 12, r: 3 })));
   const head = h("header", {}, h("h1", { text: "Zdravie" }), settings);
   const views = { sila: strengthView, vytrvalost: sportView, trener: coachView, kalendar: calendarView, nastavenia: settingsView };
   app.replaceChildren(head, tabs(page), dataStatus() ?? "", ...(views[page]?.() ?? overviewView(page)));
