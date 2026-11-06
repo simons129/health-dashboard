@@ -779,7 +779,7 @@ async function write(method, path, body) {
 // The last loaded data is kept on the phone, so the app opens at once with what it showed before and
 // then brings it up to date. Logging out deletes it.
 const SNAPSHOT_KEYS = ["trend", "dayDoc", "dayExtra", "readiness", "recovery", "readinessSpan", "strength", "workouts", "activities", "summary", "appleLast",
-  "ai", "plans", "goals", "hrZones", "efforts", "swims", "totals", "rest", "weight", "vo2", "fat", "lean"];
+  "ai", "plans", "goals", "hrZones", "efforts", "stravaLast", "swims", "totals", "rest", "weight", "vo2", "fat", "lean"];
 let dataDb = null;
 function openDataDb() {
   dataDb ??= new Promise((resolve) => {
@@ -843,7 +843,7 @@ async function loadDay() {
 const lastPerDay = (rows) => [...new Map(rows.map((r) => [r.day, r])).values()];
 async function loadBody() {
   const items = (path) => api(path).then((r) => r.items.map((d) => d.data));
-  const [totals, rest, weight, vo2, fat, lean, swims, plans, goals, zones, streams, summary, aiDocs, heart] = await Promise.all([
+  const [totals, rest, weight, vo2, fat, lean, swims, plans, goals, zones, stravaStatus, streams, summary, aiDocs, heart] = await Promise.all([
     items("/api/apple_daily_totals?sort=date&order=desc&limit=1000"),
     items("/api/apple_resting_heart_rate?sort=day&order=asc&limit=1000"),
     items("/api/apple_weight?sort=day&order=asc&limit=1000"),
@@ -854,6 +854,7 @@ async function loadBody() {
     api("/api/plans?sort=day&order=asc&limit=1000").then((r) => r.items),
     api("/api/goals?sort=created_at&order=asc&limit=100").then((r) => r.items),
     api("/api/settings/hr_zones"),
+    api("/strava/status").catch(() => null),
     api("/api/strava_streams?limit=1000&omit=points,hr_seconds,splits").then((r) => r.items),
     api(`/api/daily_summary/${localDay(new Date())}`),
     api("/api/ai_requests?sort=created_at&order=desc&limit=100").then((r) => r.items),
@@ -865,6 +866,7 @@ async function loadBody() {
   state.plans = plans.map((doc) => ({ id: doc.id, ...doc.data }));
   state.goals = goals.map((doc) => ({ id: doc.id, ...doc.data }));
   state.hrZones = zones?.data.zones ?? null;
+  state.stravaLast = stravaStatus?.lastSync ?? state.stravaLast ?? null;
   state.efforts = new Map(streams.filter((doc) => doc.data.best).map((doc) => [doc.id, { type: doc.data.sport_type, start: doc.data.start_date, best: doc.data.best }]));
   state.swims = new Map(swims.map((doc) => [doc.id, swimSummary(doc.data)]));
   state.totals = new Map(totals.map((t) => [t.date, t]));
@@ -2632,6 +2634,21 @@ function syncData() {
     .finally(() => { bar.hidden = true; syncing = null; });
   return syncing;
 }
+// Asks the server to fetch new workouts from Strava now instead of at the next hour, then loads.
+// Without a signal or with Strava down it still loads what the server has.
+const STRAVA_SYNC_TIMEOUT_MS = 60000;
+let stravaSyncing = null;
+function syncStrava() {
+  if (stravaSyncing) return stravaSyncing;
+  state.stravaSyncing = true;
+  if (state.trend) render();
+  stravaSyncing = fetch(`${API}/strava/sync`, { method: "POST", headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(STRAVA_SYNC_TIMEOUT_MS) })
+    .then((res) => { if (res.ok) state.stravaLast = new Date().toISOString(); })
+    .catch(() => {})
+    .then(() => { state.loadedAt = 0; state.stravaSyncing = false; return syncData(); })
+    .finally(() => { state.stravaSyncing = false; stravaSyncing = null; render(); });
+  return stravaSyncing;
+}
 async function reloadData(force) {
   const typing = ["TEXTAREA", "INPUT"].includes(document.activeElement?.tagName);
   if (!state.trend || !apiKey || typing || (!force && Date.now() - state.loadedAt < RELOAD_GAP_MS)) return;
@@ -2680,6 +2697,10 @@ function summaryBlock() {
     sync.append(refreshIcon());
     box.append(h("div", { class: "hero-meta" }, h("span", { text: appleStatus() }), sync));
   }
+  const strava = h("button", { class: `refresh${state.stravaSyncing ? " spinning" : ""}`, type: "button", "aria-label": "Synchronizovať Stravu", onclick: () => syncStrava() });
+  strava.disabled = !!state.stravaSyncing;
+  strava.append(refreshIcon());
+  box.append(h("div", { class: "hero-meta" }, h("span", { text: state.stravaSyncing ? "Strava: sťahujem nové tréningy…" : `Strava: ${state.stravaLast ? `synchronizované ${whenLabel(state.stravaLast)}` : "zatiaľ bez synchronizácie"}` }), strava));
   const error = aiErrorNote(key);
   if (error) box.append(error);
   return box;
@@ -4611,7 +4632,7 @@ addEventListener("touchend", () => {
   pull.style.transform = "translateY(64px)";
   pull.classList.add("spinning");
   state.loadedAt = 0;
-  syncData().finally(() => { pull.classList.remove("spinning"); placePull(0); });
+  syncStrava().finally(() => { pull.classList.remove("spinning"); placePull(0); });
 });
 
 let resizeTimer;
