@@ -4386,7 +4386,7 @@ function route() {
   const [, page = "prehlad", kind = "", id = ""] = location.hash.slice(1).split("/");
   return { page: page || "prehlad", kind, id: decodeURIComponent(id) };
 }
-const OVERVIEW_PAGES = ["prehlad", "telo", "aktivita"];
+const OVERVIEW_PAGES = ["prehlad", "telo", "aktivita", "ciele"];
 function tabs(page) {
   const active = OVERVIEW_PAGES.includes(page) ? "prehlad" : page;
   const tab = (id, href, label) => {
@@ -4420,7 +4420,7 @@ function settingsView() {
 }
 function overviewNav(page) {
   const link = (id, href, label) => h("a", { href, "aria-current": String(page === id), text: label });
-  return h("div", { class: "seg subnav", role: "group", "aria-label": "Prehľad" }, link("prehlad", "#/", "Dnes"), link("telo", "#/telo", "Telo"), link("aktivita", "#/aktivita", "Aktivita"));
+  return h("div", { class: "seg subnav", role: "group", "aria-label": "Prehľad" }, link("prehlad", "#/", "Dnes"), link("telo", "#/telo", "Telo"), link("aktivita", "#/aktivita", "Aktivita"), link("ciele", "#/ciele", "Ciele"));
 }
 // Body measures as tiles with a small trend, the full chart opens right under its tile on a tap.
 // For one day the tiles show that day, with the 30 days before it as the trend. Scores, HRV and
@@ -4517,7 +4517,8 @@ function overviewView(page) {
   if (page === "aktivita") {
     return [overviewNav(page), filters(), tiles(3, 6), fitnessCard(), h("div", { class: "grid2" }, loadCard("effort"), loadCard()), h("div", { class: "grid2" }, totalsCard("Kroky", "steps", "krokov", "var(--ride)"), totalsCard("Aktívne kalórie", "active_calories", "kcal", "var(--run)"))];
   }
-  return [overviewNav(page), heroCard(), alertsCard(), weekCard(), goalsCard(), lastWorkoutCard()].filter(Boolean);
+  if (page === "ciele") return [overviewNav(page), goalsCard()];
+  return [overviewNav(page), heroCard(), alertsCard(), weekCard(), lastWorkoutCard()].filter(Boolean);
 }
 let renderedPage = null;
 function render() {
