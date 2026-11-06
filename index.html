@@ -2830,6 +2830,8 @@ function decodePolyline(text) {
 // Heart rate drift: speed per heartbeat in the second half against the first. Under 5 % the
 // aerobic base carries the pace, more means the heart worked harder for the same speed.
 const DRIFT_MIN_SECONDS = 40 * 60;
+const STOP_SPEED = 1.4;
+const PACE_SMOOTH = 3;
 function heartDrift(points) {
   const { time, hr, speed } = points;
   if (!time?.length || !hr?.length || !speed?.length || time.at(-1) < DRIFT_MIN_SECONDS) return null;
@@ -2886,7 +2888,15 @@ function workoutCharts(sport, a, detail) {
   for (let v = 0; v <= xMax + 1e-9; v += step) xTicks.push({ v, label: `${num(v)}${v ? (hasDistance ? " km" : " min") : ""}`, anchor: v ? "middle" : "start" });
   const at = (i) => (hasDistance ? `${num(x[i], 1)} km` : `${Math.round(x[i])}. min`);
   const run = sport.lowerIsFaster;
-  const paceValues = (p.speed ?? []).map((v) => (v > 0.5 ? (run ? 1000 / v : v * 3.6) : null));
+  // Below walking speed it is a stop, not pace. The scale fits the usual pace, a short spike sits at its edge.
+  const moving = (p.speed ?? []).map((v) => (v > STOP_SPEED ? (run ? 1000 / v : v * 3.6) : null));
+  const usual = moving.filter((v) => v != null).sort((a, b) => a - b);
+  const lo = usual[Math.floor(usual.length * 0.05)], hi = usual[Math.ceil(usual.length * 0.95) - 1];
+  const pad = Math.max((hi - lo) * 0.25, run ? 10 : 1);
+  const paceDomain = usual.length ? [lo - pad, hi + pad] : null;
+  // GPS pace jumps from sample to sample, the line follows a short rolling mean.
+  const smooth = moving.map((v, i) => { if (v == null) return null; const near = moving.slice(Math.max(0, i - PACE_SMOOTH), i + PACE_SMOOTH + 1).filter((x) => x != null); return mean(near); });
+  const paceValues = smooth.map((v) => (v == null || !paceDomain ? v : Math.min(Math.max(v, paceDomain[0]), paceDomain[1])));
   const out = [];
   const chart = (title, height, options) => {
     const el = h("div", { class: "chart" });
@@ -2895,9 +2905,9 @@ function workoutCharts(sport, a, detail) {
   };
   if (paceValues.some((v) => v != null)) {
     chart(run ? "Tempo, vyššie je rýchlejšie" : "Rýchlosť", 150, {
-      series: [{ color: sport.color, values: paceValues }], invert: run, tickText: run ? clockShort : (v) => num(v),
+      series: [{ color: sport.color, values: paceValues }], invert: run, domain: paceDomain, tickText: run ? clockShort : (v) => num(v),
       label: run ? "Tempo v priebehu" : "Rýchlosť v priebehu",
-      read: (i) => ({ title: at(i), rows: [{ color: sport.color, value: paceValues[i] == null ? "stojíš" : run ? `${clockShort(paceValues[i])} /km` : `${num(paceValues[i], 1)} km/h` }] }),
+      read: (i) => ({ title: at(i), rows: [{ color: sport.color, value: moving[i] == null ? "stojíš" : run ? `${clockShort(moving[i])} /km` : `${num(moving[i], 1)} km/h` }] }),
     });
   }
   const hrMax = trainingBase().hrMax;
