@@ -135,6 +135,13 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .hint { color: var(--ink-2); font-size: 12.5px; margin: 8px 0; }
 .ex-tag { color: var(--ink-2); font-size: 12px; margin: 10px 0 -6px; }
 .badge { border: 1px solid var(--hrv); border-radius: 5px; padding: 0 5px; font-size: 11.5px; color: var(--ink); }
+.change { border-radius: 5px; padding: 0 6px; font-size: 12px; font-weight: 620; font-variant-numeric: tabular-nums; }
+.change.up { background: color-mix(in srgb, var(--good) 22%, transparent); color: var(--ink); }
+.change.down { background: color-mix(in srgb, var(--warning) 28%, transparent); color: var(--ink); }
+.change.same { background: var(--wash); color: var(--ink-2); }
+.ex .before { font-size: 12px; color: var(--ink-2); margin-top: 4px; }
+.fact .delta { font-size: 12px; color: var(--ink-2); margin-top: 1px; }
+.compare-line { font-size: 13px; margin: 8px 0 2px; }
 .sets { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 .sets span { background: var(--wash); border-radius: 5px; padding: 1px 7px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .subnav { margin-bottom: 12px; max-width: 100%; overflow-x: auto; white-space: nowrap; }
@@ -1547,27 +1554,92 @@ function exerciseRow(entry, active) {
 function backLink(href, label) {
   return h("a", { class: "back", href, text: `‹ ${label}` });
 }
+// An exercise against the last time it was done: more weight first, at the same weight more reps.
+function exerciseChange(session, previous) {
+  if (!previous) return null;
+  const repsAt = (p, kg) => p.sets.filter((set) => set.reps != null && (kg == null || set.kg === kg)).reduce((sum, set) => sum + set.reps, 0);
+  if (session.top && previous.top) {
+    const kg = session.top.kg - previous.top.kg;
+    if (Math.abs(kg) > 0.01) return { tone: kg > 0 ? "up" : "down", text: signed(kg) };
+    const reps = repsAt(session, session.top.kg) - repsAt(previous, previous.top.kg);
+    return reps ? { tone: reps > 0 ? "up" : "down", text: `${reps > 0 ? "+" : "−"}${Math.abs(reps)} opak.` } : { tone: "same", text: "=" };
+  }
+  const reps = repsAt(session) - repsAt(previous);
+  return reps ? { tone: reps > 0 ? "up" : "down", text: `${reps > 0 ? "+" : "−"}${Math.abs(reps)} opak.` } : { tone: "same", text: "=" };
+}
+const setsText = (sets) => {
+  const groups = [];
+  for (const set of sets) { const label = setLabel(set), last = groups.at(-1); if (last?.label === label) last.count++; else groups.push({ label, count: 1 }); }
+  return groups.map((g) => (g.count > 1 ? `${g.count}× ${g.label}` : g.label)).join(", ");
+};
 function workoutPane(workout, index) {
+  // The last workout of the same part before this one.
+  const previous = state.workouts.find((w) => w.region === workout.region && w.day < workout.day);
+  const activity = state.activities.find((a) => String(a.id) === workout.id);
+  const volumeDiff = previous ? (workout.volume - previous.volume) / 1000 : null;
+  const factWith = (label, value, unit, delta) => { const el = fact(label, value, unit); if (delta) el.append(h("div", { class: "delta", text: delta })); return el; };
+  const signedNumber = (v, digits = 0) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${num(Math.abs(v), digits)}`;
   const pane = h("section", { class: "card detail" }, backLink("#/sila/treningy", "Tréningy"),
     h("h2", { text: workout.region }),
     h("p", { class: "note keep", text: `${fullDate(workout.day)} · ${workout.title}` }),
-    h("div", { class: "facts" }, fact("Objem", num(workout.volume / 1000, 1), "t"), fact("Série", String(workout.sets)),
-      fact("Cviky", String(workout.exercises.length)), workout.time && fact("Čas", workout.time)),
+    h("div", { class: "facts" },
+      factWith("Objem", num(workout.volume / 1000, 1), "t", volumeDiff != null ? `${signedNumber(volumeDiff, 1)} t` : null),
+      factWith("Série", String(workout.sets), null, previous ? signedNumber(workout.sets - previous.sets) : null),
+      fact("Cviky", String(workout.exercises.length)), workout.time && fact("Čas", workout.time),
+      activity?.average_heartrate ? fact("Tep", num(activity.average_heartrate), "bpm") : null,
+      activity ? fact("Námaha", effortText(activity)) : null),
     aiBlock("workout", workout.id, "Zhodnotiť tréning"),
-    h("p", { class: "hint", text: "Vpravo je zmena najvyššej váhy oproti minulému tréningu. Klikni na cvik pre jeho históriu." }));
+    h("p", { class: "hint", text: "Pri každom cviku je zmena oproti minulému razu: viac váhy, alebo pri rovnakej váhe viac opakovaní. Pod cvikom je, čo si mal minule. Klikni na cvik pre jeho históriu." }));
+  const changes = [];
+  const rows = [];
   let inSuperset = false;
   for (const e of workout.exercises) {
-    if (e.superset && !inSuperset) pane.append(h("div", { class: "ex-tag", text: "Superset" }));
+    if (e.superset && !inSuperset) rows.push(h("div", { class: "ex-tag", text: "Superset" }));
     inSuperset = e.superset;
-    const session = index.get(e.name).sessions.find((p) => p.workout === workout);
-    pane.append(h("a", { class: "ex", href: exerciseHref(e.name) },
+    const sessions = index.get(e.name).sessions;
+    const at = sessions.findIndex((p) => p.workout === workout);
+    const session = sessions[at], before = sessions[at - 1];
+    const change = exerciseChange(session, before);
+    if (change) changes.push(change.tone);
+    rows.push(h("a", { class: "ex", href: exerciseHref(e.name) },
       h("div", { class: "ex-head" }, h("span", { class: "name", text: e.name }),
         h("span", { class: "right" },
-          session.record ? h("span", { class: "badge", text: "Rekord" }) : null,
-          session.change ? h("span", { text: signed(session.change) }) : null,
+          session.ormRecord || session.record ? h("span", { class: "badge", text: "🏆 rekord" }) : null,
+          change ? h("span", { class: `change ${change.tone}`, text: change.text }) : h("span", { class: "change same", text: "nový" }),
           h("span", { class: "chev", text: "›", "aria-hidden": "true" }))),
-      setChips(e.sets)));
+      setChips(e.sets),
+      before ? h("div", { class: "before", text: `Minule ${shortDate(before.workout.day)}: ${setsText(before.sets)}` }) : null));
   }
+  if (changes.length) {
+    const count = (tone) => changes.filter((t) => t === tone).length;
+    pane.append(h("div", { class: "compare-line" }, previous ? `Oproti ${shortDate(previous.day)}: ` : "",
+      ...[[count("up"), "lepšie", "up"], [count("same"), "rovnako", "same"], [count("down"), "horšie", "down"]].filter(([n]) => n)
+        .flatMap(([n, label, tone], i) => [i ? " " : "", h("span", { class: `change ${tone}`, text: `${plural(n, "cvik", "cviky", "cvikov")} ${label}` })])));
+  }
+  // Volume per muscle group, the mark is the last workout of the same part.
+  const volumeBy = (w) => {
+    const map = new Map();
+    for (const e of w.exercises) {
+      const session = index.get(e.name)?.sessions.find((p) => p.workout === w);
+      const muscle = muscleOf(e.name) ?? "Ostatné";
+      map.set(muscle, (map.get(muscle) ?? 0) + (session?.volume ?? 0));
+    }
+    return map;
+  };
+  const now = volumeBy(workout), then = previous ? volumeBy(previous) : new Map();
+  const muscles = [...new Set([...now.keys(), ...then.keys()])].filter((m) => (now.get(m) ?? 0) + (then.get(m) ?? 0) > 0)
+    .sort((a, b) => (now.get(b) ?? 0) - (now.get(a) ?? 0));
+  if (muscles.length) {
+    const scale = Math.max(...muscles.flatMap((m) => [now.get(m) ?? 0, then.get(m) ?? 0])) * 1.05 || 1;
+    pane.append(h("div", { class: "group-head", text: previous ? `Objem podľa partie, značka je ${shortDate(previous.day)}` : "Objem podľa partie" }),
+      ...muscles.map((m) => h("div", { class: "muscle" }, h("span", { text: m }),
+        h("div", { class: "track", role: "img", "aria-label": `${m}: ${num((now.get(m) ?? 0) / 1000, 1)} t` },
+          Object.assign(h("i"), { style: `width:${((now.get(m) ?? 0) / scale) * 100}%` }),
+          previous ? Object.assign(h("u"), { style: `left:${((then.get(m) ?? 0) / scale) * 100}%` }) : null),
+        h("span", { class: "value" }, h("b", { text: `${num((now.get(m) ?? 0) / 1000, 1)} t` }),
+          previous ? ` / ${num((then.get(m) ?? 0) / 1000, 1)}` : ""))));
+  }
+  pane.append(...rows);
   return pane;
 }
 function exercisePane(entry) {
