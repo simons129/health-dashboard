@@ -221,6 +221,7 @@ nav.tabs a[aria-current=page] { color: var(--ink); border-bottom-color: var(--in
 .route-map .leaflet-control-attribution { font-size: 9.5px; background: rgba(255,255,255,.7); }
 @media (prefers-color-scheme: dark) { .route-map .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.85) contrast(.9); } }
 .map-modes { margin: 12px 0 0; }
+.same-route .record[aria-current=true] { background: var(--wash); box-shadow: inset 3px 0 0 var(--hrv); }
 .map-modes button { min-height: 32px; font-size: 13px; }
 .map-key { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); margin: 2px 0 4px; }
 .map-key .ramp { flex: 1; height: 8px; border-radius: 4px; }
@@ -2829,6 +2830,7 @@ function activityCard(sport, a) {
       detail?.drift != null ? fact("Tepový drift", `${num(detail.drift, 1)} %`) : null),
     routeMap(detail, sport),
     ...workoutCharts(sport, a, detail),
+    sameRouteCard(sport, a, detail),
     aiBlock("activity", String(a.id), "Zhodnotiť tréning"),
     h("a", { class: "more", href: `#/kalendar/${day}`, text: "Otvoriť deň v kalendári ›" }));
 }
@@ -2839,16 +2841,103 @@ function activityDetail(a) {
   const cached = state.details.get(id);
   if (cached) return cached.loading ? null : cached;
   state.details.set(id, { loading: true });
-  Promise.all([api(`/api/strava_streams/${id}`), api(`/api/strava_activities/${id}`)])
-    .then(([stream, full]) => {
+  Promise.all([api(`/api/strava_streams/${id}`), api(`/api/strava_activities/${id}`), sportRoutes(a.sport_type)])
+    .then(([stream, full, routes]) => {
       const data = stream?.data ?? null;
       const factors = data && RUN_TYPES.has(a.sport_type) ? gradeFactors(data.points) : null;
-      state.details.set(id, { stream: data, route: decodePolyline(full?.data.map?.summary_polyline ?? ""), drift: data ? heartDrift(data.points) : null,
-        factors, flatPace: factors ? flatPace(data.points, factors) : null });
+      const line = decodePolyline(full?.data.map?.summary_polyline ?? "");
+      state.details.set(id, { stream: data, route: line, drift: data ? heartDrift(data.points) : null,
+        factors, flatPace: factors ? flatPace(data.points, factors) : null, mates: sameRoute(a, line, routes) });
       if (route().id === id) render();
     })
     .catch(() => state.details.delete(id));
   return null;
+}
+// Workouts on the same route: of the same sport, within a tenth of the distance, starting and ending
+// close by, and following the same line, either way round. The line is compared at 40 points along
+// each route, on average no point may be farther than 150 m from the other route.
+const ROUTE_DISTANCE_SHARE = 0.1, ROUTE_END_METRES = 300, ROUTE_MATCH_METRES = 150, ROUTE_SAMPLES = 40;
+function metresBetween([lat1, lng1], [lat2, lng2]) {
+  const rad = Math.PI / 180, dLat = (lat2 - lat1) * rad, dLng = (lng2 - lng1) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * rad) * Math.cos(lat2 * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+function sampleRoute(points, count = ROUTE_SAMPLES) {
+  const steps = [0];
+  for (let i = 1; i < points.length; i++) steps.push(steps[i - 1] + metresBetween(points[i - 1], points[i]));
+  const total = steps.at(-1);
+  if (!total) return [];
+  const out = [];
+  for (let k = 0, i = 0; k < count; k++) {
+    const target = (total * k) / (count - 1);
+    while (i < steps.length - 2 && steps[i + 1] < target) i++;
+    out.push(points[i]);
+  }
+  return out;
+}
+function routeGap(a, b) {
+  const nearest = (p, line) => Math.min(...line.map((q) => metresBetween(p, q)));
+  return Math.max(mean(a.map((p) => nearest(p, b))), mean(b.map((p) => nearest(p, a))));
+}
+const routeSets = new Map();
+function sportRoutes(sportType) {
+  if (!routeSets.has(sportType)) {
+    routeSets.set(sportType, api(`/api/strava_activities?filter.sport_type=${encodeURIComponent(sportType)}&limit=1000`)
+      .then((r) => r.items.map((d) => d.data).filter((x) => x.map?.summary_polyline))
+      .catch(() => { routeSets.delete(sportType); return []; }));
+  }
+  return routeSets.get(sportType);
+}
+function sameRoute(a, route, others) {
+  if (route.length < 2 || !a.distance) return [];
+  const mine = sampleRoute(route);
+  const near = (p, q) => p?.length === 2 && q?.length === 2 && metresBetween(p, q) <= ROUTE_END_METRES;
+  return others.filter((o) => String(o.id) !== String(a.id) && Math.abs(o.distance - a.distance) <= a.distance * ROUTE_DISTANCE_SHARE
+      && ((near(o.start_latlng, a.start_latlng) && near(o.end_latlng, a.end_latlng)) || (near(o.start_latlng, a.end_latlng) && near(o.end_latlng, a.start_latlng))))
+    .filter((o) => routeGap(mine, sampleRoute(decodePolyline(o.map.summary_polyline))) <= ROUTE_MATCH_METRES);
+}
+// This workout among the others on its route: rank, the change against the last time, the trend and every try.
+function sameRouteCard(sport, a, detail) {
+  const mates = detail?.mates;
+  if (!mates?.length) return null;
+  const all = [...mates, a].filter((x) => x.moving_time > 0).sort((x, y) => x.start_date.localeCompare(y.start_date));
+  // Tries differ a little in length, so they compare by pace, not by time.
+  const pace = (x) => sport.pace(x);
+  const slowness = (x) => (sport.lowerIsFaster ? pace(x) : -pace(x));
+  const ranked = [...all].sort((x, y) => slowness(x) - slowness(y));
+  const rank = ranked.findIndex((x) => String(x.id) === String(a.id)) + 1;
+  const before = all.filter((x) => x.start_date < a.start_date).at(-1);
+  const diff = before ? slowness(a) - slowness(before) : null;
+  const hrDiff = before?.average_heartrate && a.average_heartrate ? a.average_heartrate - before.average_heartrate : null;
+  const sign = (v, text) => `${v < 0 ? "o " + text(-v) + " rýchlejšie" : v > 0 ? "o " + text(v) + " pomalšie" : "rovnako rýchlo"}`;
+  const card = h("div", { class: "same-route" },
+    h("div", { class: "detail-label" }, h("span", { text: "Na tejto trase" }), h("span", { text: `${all.length}× za ${plural(Math.max(1, Math.round(daysBetween(all[0].start_date_local.slice(0, 10), localDay(new Date())) / 30.4)), "mesiac", "mesiace", "mesiacov")}` })),
+    h("div", { class: "facts" },
+      fact("Poradie", `${rank}. z ${all.length}`),
+      before ? fact("Oproti minule", sign(diff, (v) => (sport.lowerIsFaster ? `${clockShort(v)} /km` : `${num(v, 1)} km/h`))) : null,
+      hrDiff != null ? fact("Tep oproti minule", `${hrDiff > 0 ? "+" : hrDiff < 0 ? "−" : ""}${num(Math.abs(hrDiff))} bpm`) : null));
+  if (all.length >= 3) {
+    const start = all[0].start_date_local.slice(0, 10), end = all.at(-1).start_date_local.slice(0, 10);
+    const xs = all.map((x) => daysBetween(start, x.start_date_local.slice(0, 10)));
+    const chart = h("div", { class: "chart" });
+    chart.draw = () => lineChart(chart, {
+      // Over more than a year the axis needs the year too.
+      height: 140, x: xs, xMin: 0, xMax: Math.max(xs.at(-1), 1), invert: sport.lowerIsFaster,
+      xTicks: daysBetween(start, end) > 330 ? dateAxis(start, end).map((t) => { const d = new Date(`${addDays(start, t.v)}T12:00:00`); return { ...t, label: `${d.getMonth() + 1}/${String(d.getFullYear()).slice(2)}` }; }) : dateAxis(start, end),
+      series: [{ color: sport.color, values: all.map(pace) }, { color: sport.color, values: all.map(pace), dots: true }],
+      tickText: sport.lowerIsFaster ? clockShort : (v) => num(v), label: "Tempo na tejto trase v čase", gap: 182,
+      read: (i) => ({ title: fullDate(all[i].start_date_local.slice(0, 10)), rows: [
+        { color: sport.color, value: sport.paceText(pace(all[i])), label: hours(all[i].moving_time) },
+        all[i].average_heartrate ? { color: "var(--hr)", value: `${num(all[i].average_heartrate)} bpm` } : null].filter(Boolean) }),
+    });
+    card.append(chart);
+  }
+  const key = (x) => `#/vytrvalost/${Object.entries(SPORTS).find(([, item]) => item.types.includes(x.sport_type))?.[0]}/${x.id}`;
+  card.append(h("div", { class: "rows-plain" }, ...[...all].reverse().map((x) => h("a", { class: "record", href: key(x), "aria-current": String(String(x.id) === String(a.id)) },
+    h("div", { class: "main" }, h("div", { class: "title", text: fullDate(x.start_date_local.slice(0, 10)) }),
+      h("div", { class: "sub", text: [hours(x.moving_time), x.average_heartrate ? `${num(x.average_heartrate)} bpm` : null].filter(Boolean).join(" · ") })),
+    h("div", { class: "value", text: sport.paceText(pace(x)) })))));
+  return card;
 }
 // Google's encoded polyline, the way Strava sends a route.
 function decodePolyline(text) {
